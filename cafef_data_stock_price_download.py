@@ -161,7 +161,7 @@ def update_vn_trading_data(max_days_back=7):
 
     bucket = os.getenv("R2_BUCKET")
     prefix_main = "cafef_data/"
-    prefix_backup = "cafef_data/cafef_data_backup/"
+    prefix_backup = "cafef_data/cafef_data_backup/stock_backup/"
 
     # Ensure folders exist
     ensure_folder_exists(bucket, prefix_main)

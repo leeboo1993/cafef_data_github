@@ -26,9 +26,11 @@ SAVE_DIR = BASE_DIR / "deposit_rate"
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 BUCKET = os.getenv("R2_BUCKET")
-PREFIX_MAIN = "cafef_data/"  # master lives here
-PREFIX_BACKUP_MASTER = "cafef_data/cafef_data_backup/"  # keep last 2 master files
-PREFIX_BACKUP_INDIV = "cafef_data/cafef_data_backup/deposit_rate/"  # all daily individual files
+
+# 🔧 FIXED: separated folders for deposit rate data
+PREFIX_MAIN = "cafef_data/"
+PREFIX_BACKUP_MASTER = "cafef_data/cafef_data_backup/deposit_rate_backup/master_file_backup/"
+PREFIX_BACKUP_INDIV = "cafef_data/cafef_data_backup/deposit_rate_backup/individual/"
 
 SEARCH_URL_TEMPLATE = (
     "https://vietnamnet.vn/tim-kiem-p{page}?q=Lãi suất ngân hàng hôm nay&od=2&bydaterang=all&newstype=all"
@@ -369,10 +371,9 @@ def build_master_parquet(master_path):
 def sync_to_r2(today_ddmmyy, master_path):
     """
     Uploads:
-    - master parquet -> cafef_data/deposit_rate_<DDMMYY>.parquet
-    - master parquet -> cafef_data/cafef_data_backup/deposit_rate_<DDMMYY>.parquet (keep 2 latest)
-    - individual day parquet(s) -> cafef_data/cafef_data_backup/deposit_rate/*.parquet (append-only)
-    Also trims backup masters to keep=2.
+    - master parquet -> cafef_data/deposit_rate/deposit_rate_<DDMMYY>.parquet
+    - master parquet -> cafef_data/cafef_data_backup/deposit_rate_master/deposit_rate_<DDMMYY>.parquet (keep 2 latest)
+    - individual day parquet(s) -> cafef_data/cafef_data_backup/deposit_rate_daily/*.parquet (append-only)
     """
 
     # ensure folders exist in R2
@@ -380,23 +381,19 @@ def sync_to_r2(today_ddmmyy, master_path):
     ensure_folder_exists(BUCKET, PREFIX_BACKUP_MASTER)
     ensure_folder_exists(BUCKET, PREFIX_BACKUP_INDIV)
 
-    # 1) upload master to main
+    # 🔧 FIXED: upload to new folders
     main_key = f"{PREFIX_MAIN}deposit_rate_{today_ddmmyy}.parquet"
     upload_to_r2(master_path, BUCKET, main_key)
     print(f"☁️ Uploaded master → {main_key}")
 
-    # 2) upload master to backup_master, then prune
     backup_master_key = f"{PREFIX_BACKUP_MASTER}deposit_rate_{today_ddmmyy}.parquet"
     upload_to_r2(master_path, BUCKET, backup_master_key)
     clean_old_backups_r2(BUCKET, PREFIX_BACKUP_MASTER, keep=2)
 
-    # 3) upload individual daily files to backup/deposit_rate
+    # individual daily uploads
     for p in SAVE_DIR.glob("deposit_rate_individual_*.parquet"):
-        upload_to_r2(
-            p,
-            BUCKET,
-            f"{PREFIX_BACKUP_INDIV}{p.name}"
-        )
+        upload_to_r2(p, BUCKET, f"{PREFIX_BACKUP_INDIV}{p.name}")
+
     print("📤 Synced individual daily files as well.")
 
 
@@ -450,7 +447,7 @@ def run_deposit_rate_scraper(start_date=None, end_date=None, headless=True):
 # OPTIONAL MANUAL RUN EXAMPLES
 # ============================================================
 # Example 1: only today (latest article only)
-# run_deposit_rate_scraper()
+run_deposit_rate_scraper()
 
 # Example 2: historical range (scrape between 2025-09-01 and 2025-10-25)
-run_deposit_rate_scraper(start_date="2023-01-01")
+#run_deposit_rate_scraper(start_date="2023-01-01")

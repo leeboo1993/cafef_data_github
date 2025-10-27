@@ -13,8 +13,10 @@ SAVE_DIR = Path.cwd() / "gold_price"
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 BUCKET = os.getenv("R2_BUCKET")
+
+# 🔧 FIXED: separate folder for gold data
 PREFIX_MAIN = "cafef_data/"
-PREFIX_BACKUP = "cafef_data/cafef_data_backup/"
+PREFIX_BACKUP = "cafef_data/cafef_data_backup/gold_backup/"
 
 print("🪙 Fetching SJC gold data (incremental update, no spreads)...")
 
@@ -104,17 +106,17 @@ def update_gold_prices():
     # --- Fetch new data
     new_df = fetch_gold_data()
 
-    # --- Merge incrementally with existing local data
+    # --- Merge incrementally
     combined_df = incremental_update(new_df, parquet_path)
 
-    # --- Save as compressed Parquet
+    # --- Save
     combined_df.to_parquet(parquet_path, index=False, compression="gzip")
     print(f"💾 Saved Parquet → {parquet_path} ({len(combined_df)} rows)")
 
-    # --- Upload to R2
+    # 🔧 FIXED: upload to gold-specific folder
     upload_to_r2(parquet_path, BUCKET, f"{PREFIX_MAIN}{parquet_path.name}")
 
-    # --- Keep 2 backups only
+    # 🔧 FIXED: clean backups in gold-specific folder
     clean_old_backups_r2(BUCKET, PREFIX_BACKUP, keep=2)
     print("☁️ Uploaded new gold data and cleaned old backups.")
 
