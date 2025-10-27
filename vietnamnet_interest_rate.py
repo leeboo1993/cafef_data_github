@@ -1,7 +1,3 @@
-#delete later
-from dotenv import load_dotenv
-load_dotenv()  # reads .env file in current directory
-
 import os
 import re
 import asyncio
