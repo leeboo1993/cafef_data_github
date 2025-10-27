@@ -1,9 +1,12 @@
+import os
+import re
+import glob
+import boto3
 import requests
-from zipfile import ZipFile
-from io import BytesIO
 import pandas as pd
+from io import BytesIO
+from zipfile import ZipFile
 from datetime import datetime, timedelta
-import os, glob
 
 # =====================================================
 # 1️⃣ Build CaféF ZIP URL
@@ -82,72 +85,125 @@ def combine_trading_data(valid_files):
 
 
 # =====================================================
-# 5️⃣ Clean old backups (keep 2 most recent by date)
+# 5️⃣ Utilities
 # =====================================================
-def clean_old_backups(backup_dir, keep=2):
-    files = glob.glob(os.path.join(backup_dir, "cafef_stock_price_*.parquet"))
-    if len(files) <= keep:
+def extract_date_from_name(name):
+    m = re.search(r"(\d{6})\.parquet$", name)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%d%m%y")
+    except Exception:
+        return None
+
+
+def r2_client():
+    session = boto3.session.Session()
+    return session.client(
+        service_name="s3",
+        endpoint_url=os.getenv("R2_ENDPOINT"),
+        aws_access_key_id=os.getenv("R2_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("R2_SECRET_ACCESS_KEY"),
+    )
+
+
+def list_r2_files(bucket, prefix):
+    s3 = r2_client()
+    resp = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    if "Contents" not in resp:
+        return []
+    return [obj["Key"] for obj in resp["Contents"]]
+
+
+def ensure_folder_exists(bucket, folder):
+    s3 = r2_client()
+    if not list_r2_files(bucket, folder):
+        s3.put_object(Bucket=bucket, Key=f"{folder.rstrip('/')}/")
+        print(f"📁 Created folder on R2: {folder}")
+
+
+def upload_to_r2(local_path, bucket, key):
+    s3 = r2_client()
+    s3.upload_file(local_path, bucket, key)
+    print(f"☁️ Uploaded to R2 → s3://{bucket}/{key}")
+
+
+def move_to_backup_r2(bucket, prefix_main, prefix_backup, keep=2):
+    s3 = r2_client()
+    main_files = list_r2_files(bucket, prefix_main)
+    parquet_files = [f for f in main_files if f.endswith(".parquet")]
+    if not parquet_files:
+        print("⚙️ No existing file to backup.")
         return
-
-    def extract_date(f):
-        try:
-            basename = os.path.basename(f)
-            date_part = basename.replace("cafef_stock_price_", "").replace(".parquet", "")
-            return datetime.strptime(date_part, "%d%m%y")
-        except Exception:
-            return datetime.min
-
-    files_sorted = sorted(files, key=extract_date, reverse=True)
-    to_delete = files_sorted[keep:]
-    for f in to_delete:
-        try:
-            os.remove(f)
-            print(f"🗑️ Deleted old backup: {os.path.basename(f)}")
-        except Exception as e:
-            print(f"⚠️ Could not delete {f}: {e}")
+    # Sort by date
+    parquet_files = sorted(parquet_files, key=lambda x: extract_date_from_name(x) or datetime.min, reverse=True)
+    latest = parquet_files[0]
+    for old_file in parquet_files[1:]:
+        new_key = old_file.replace(prefix_main, prefix_backup)
+        s3.copy_object(Bucket=bucket, CopySource={"Bucket": bucket, "Key": old_file}, Key=new_key)
+        s3.delete_object(Bucket=bucket, Key=old_file)
+        print(f"📦 Moved {old_file} → {new_key}")
+    # Clean up old backups (keep 2)
+    backups = list_r2_files(bucket, prefix_backup)
+    backups = sorted(backups, key=lambda x: extract_date_from_name(x) or datetime.min, reverse=True)
+    for b in backups[keep:]:
+        s3.delete_object(Bucket=bucket, Key=b)
+        print(f"🗑️ Deleted old backup: {b}")
 
 
 # =====================================================
-# 6️⃣ Main updater
+# 6️⃣ Main updater with skip logic + R2 integration
 # =====================================================
 def update_vn_trading_data(max_days_back=7):
     base_dir = os.getcwd()
     output_dir = os.path.join(base_dir, "cafef_price")
     os.makedirs(output_dir, exist_ok=True)
 
-    backup_dir = os.path.join(output_dir, "backup")
-    os.makedirs(backup_dir, exist_ok=True)
+    bucket = os.getenv("R2_BUCKET")
+    prefix_main = "cafef_data/"
+    prefix_backup = "cafef_data/cafef_data_backup/"
+
+    # Ensure folders exist
+    ensure_folder_exists(bucket, prefix_main)
+    ensure_folder_exists(bucket, prefix_backup)
+
+    # Check existing latest file on R2
+    existing_files = list_r2_files(bucket, prefix_main)
+    existing_dates = [extract_date_from_name(f) for f in existing_files if f.endswith(".parquet")]
+    latest_existing = max([d for d in existing_dates if d is not None], default=None)
 
     today = datetime.now()
     today_str = today.strftime("%d%m%y")
-    yesterday_str = (today - timedelta(days=1)).strftime("%d%m%y")
 
-    parquet_today = os.path.join(output_dir, f"cafef_stock_price_{today_str}.parquet")
-    parquet_yesterday = os.path.join(output_dir, f"cafef_stock_price_{yesterday_str}.parquet")
+    if latest_existing and latest_existing.date() >= today.date():
+        print(f"✅ Already up-to-date ({latest_existing.strftime('%d/%m/%Y')}) → skip download.")
+        return None
 
-    # 🕐 Move yesterday’s file to backup
-    if os.path.exists(parquet_yesterday):
-        os.rename(parquet_yesterday, os.path.join(backup_dir, os.path.basename(parquet_yesterday)))
-        print(f"🕐 Backed up yesterday’s file → {backup_dir}")
-
-    # 🔄 Try to find the newest valid CaféF ZIP
+    # Try download
     for i in range(max_days_back):
         date_obj = today - timedelta(days=i)
         url, date_str = build_cafef_url(date_obj)
         files = download_and_extract(url, date_str, output_dir)
         if not files:
             continue
-
         valid = validate_cafef_data(files)
         if not valid:
             continue
 
+        parquet_path = os.path.join(output_dir, f"cafef_stock_price_{date_obj.strftime('%d%m%y')}.parquet")
         new_df = combine_trading_data(valid)
-        new_df.to_parquet(parquet_today, index=False, compression="snappy")
-        print(f"💾 Saved Parquet → {parquet_today} ({len(new_df)} rows)")
+        cutoff = datetime.now() - timedelta(days=730)
+        new_df = new_df[new_df["date"] >= cutoff]
+        new_df.to_parquet(parquet_path, index=False, compression="gzip")
 
-        clean_old_backups(backup_dir, keep=2)
-        return parquet_today, date_str
+        print(f"💾 Saved Parquet → {parquet_path} ({len(new_df)} rows)")
+
+        # Backup old + upload new
+        move_to_backup_r2(bucket, prefix_main, prefix_backup, keep=2)
+        upload_to_r2(parquet_path, bucket, f"{prefix_main}cafef_stock_price_{date_obj.strftime('%d%m%y')}.parquet")
+
+        print(f"✅ Uploaded new file to R2: {prefix_main}")
+        return parquet_path
 
     raise ValueError("❌ No valid CaféF data found in recent days.")
 
@@ -156,5 +212,8 @@ def update_vn_trading_data(max_days_back=7):
 # 7️⃣ Entry point
 # =====================================================
 if __name__ == "__main__":
-    parquet_path, used_date = update_vn_trading_data()
-    print(f"\n✅ Done → Saved: {parquet_path}")
+    parquet_path = update_vn_trading_data()
+    if parquet_path:
+        print(f"\n✅ Done → Uploaded new CaféF data: {os.path.basename(parquet_path)}")
+    else:
+        print("\n🟢 No new data to upload (already up-to-date).")

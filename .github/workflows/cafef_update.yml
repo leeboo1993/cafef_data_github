@@ -1,24 +1,32 @@
+# ============================================================
+# 📅 Daily CaféF Data Update to Cloudflare R2
+# ============================================================
 name: Daily CaféF Data Update
 
+# ============================================================
+# ⚙️ Schedule and manual trigger
+# ============================================================
 on:
   schedule:
-    - cron: '0 13 * * *'   # 20:00 Vietnam time (13:00 UTC)
-  workflow_dispatch:
+    # 20:00 Vietnam time (13:00 UTC)
+    - cron: '0 13 * * *'
+  workflow_dispatch:  # allow manual runs
 
+# ============================================================
+# 💻 Main job
+# ============================================================
 jobs:
   update:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # allow pushing to the repo
+      contents: read   # no push needed anymore (we upload to R2)
 
     steps:
       # --------------------------------------------------------
-      # 1️⃣ Checkout code
+      # 1️⃣ Checkout repository
       # --------------------------------------------------------
       - name: 🧭 Checkout repository
         uses: actions/checkout@v4
-        with:
-          persist-credentials: false  # disable default auth
 
       # --------------------------------------------------------
       # 2️⃣ Setup Python
@@ -33,61 +41,25 @@ jobs:
       # --------------------------------------------------------
       - name: 📦 Install dependencies
         run: |
-          pip install pandas pyarrow requests
+          pip install pandas pyarrow boto3 requests
 
       # --------------------------------------------------------
       # 4️⃣ Run the CaféF updater script
       # --------------------------------------------------------
-      - name: 🚀 Run CaféF updater
+      - name: 🚀 Run CaféF updater and upload to R2
+        env:
+          # These secrets come from your GitHub repo → Settings → Secrets → Actions
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: broker-data
         run: |
           python cafef_data_stock_price_download.py
 
       # --------------------------------------------------------
-      # 5️⃣ Commit and push updated data
+      # 5️⃣ Upload artifact (optional backup in GitHub Actions)
       # --------------------------------------------------------
-      - name: 💾 Commit and push updated data
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -e  # 🔹 stop if any command fails
-
-          echo "🧠 Starting commit and push sequence..."
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global --add safe.directory $GITHUB_WORKSPACE
-
-          echo "📂 Current working directory: $(pwd)"
-          echo "🧩 Repository detected: $REPO"
-          echo "--------------------------------------------"
-
-          echo "🧮 Adding and committing changes..."
-          git add cafef_price/ || { echo "❌ [ERROR LINE 1] Git add failed"; exit 1; }
-          git commit -m "🔁 Auto update CaféF data ($(date +'%Y-%m-%d'))" \
-            && echo "✅ Commit success" \
-            || echo "ℹ️ No new changes to commit"
-
-          echo "--------------------------------------------"
-          echo "🔐 Resetting and verifying remote..."
-          git remote -v || { echo "❌ [ERROR LINE 2] Git remote -v failed"; exit 1; }
-          git remote remove origin || true
-          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git"
-          git remote -v || { echo "❌ [ERROR LINE 3] Git remote setup failed"; exit 1; }
-
-          echo "--------------------------------------------"
-          echo "🚀 Attempting to push..."
-          git push origin HEAD:main --force || { 
-            echo "❌ [ERROR LINE 4] Git push failed. Likely due to bad credentials or wrong remote."; 
-            echo "   → Check if remote is private or token missing permissions."; 
-            exit 1; 
-          }
-
-          echo "✅ Push completed successfully!"
-
-      # --------------------------------------------------------
-      # 6️⃣ Upload parquet artifacts
-      # --------------------------------------------------------
-      - name: 📤 Upload data artifact
+      - name: 📤 Upload local Parquet artifact
         uses: actions/upload-artifact@v4
         with:
           name: cafef-data
