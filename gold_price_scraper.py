@@ -1,23 +1,30 @@
-from utils_r2 import r2_client, upload_to_r2, clean_old_backups_r2
-from datetime import datetime
 import os
-import pandas as pd
 import requests
+import pandas as pd
+from datetime import datetime
 from pathlib import Path
+from utils_r2 import upload_to_r2, clean_old_backups_r2, list_r2_files
 
-# ============================================================
-# CONFIG
-# ============================================================
+# ======================================================
+# CONFIGURATION
+# ======================================================
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 SAVE_DIR = Path.cwd() / "gold_price"
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
-print("🟡 Fetching gold data ...")
+BUCKET = os.getenv("R2_BUCKET")
+PREFIX_MAIN = "cafef_data/"
+PREFIX_BACKUP = "cafef_data/cafef_data_backup/"
 
-# ============================================================
-# 1️⃣ FETCH GOLD DATA
-# ============================================================
-def fetch_gold():
+print("🪙 Fetching SJC gold data (incremental update, no spreads)...")
+
+# ======================================================
+# 1️⃣ FETCH GOLD DATA FROM CAFEF
+# ======================================================
+# ======================================================
+# 1️⃣ FETCH GOLD DATA FROM CAFEF (fixed timezone issue)
+# ======================================================
+def fetch_gold_data():
     urls = {
         "bar": "https://cafef.vn/du-lieu/Ajax/ajaxgoldpricehistory.ashx?index=all",
         "ring": "https://cafef.vn/du-lieu/Ajax/AjaxGoldPriceRing.ashx?time=all&zone=11"
@@ -28,65 +35,93 @@ def fetch_gold():
         r.raise_for_status()
         return r.json().get("Data", {}).get("goldPriceWorldHistories", [])
 
-    # --- Load raw JSONs ---
-    bar = pd.DataFrame(fetch(urls["bar"]))
-    ring = pd.DataFrame(fetch(urls["ring"]))
+    bar_hist = fetch(urls["bar"])
+    ring_hist = fetch(urls["ring"])
 
-    if bar.empty or ring.empty:
-        raise ValueError("⚠️ No gold data retrieved from CaféF.")
+    bar_records = [
+        {
+            "date": pd.to_datetime(item.get("createdAt") or item.get("lastUpdated"), errors="coerce"),
+            "bar_buy": item.get("buyPrice"),
+            "bar_sell": item.get("sellPrice"),
+        }
+        for item in bar_hist
+    ]
 
-    # --- Merge createdAt / lastUpdated columns safely ---
-    bar["date"] = pd.to_datetime(
-        bar["createdAt"].fillna(bar["lastUpdated"]), errors="coerce"
-    )
-    ring["date"] = pd.to_datetime(
-        ring["createdAt"].fillna(ring["lastUpdated"]), errors="coerce"
-    )
+    ring_records = [
+        {
+            "date": pd.to_datetime(item.get("createdAt") or item.get("lastUpdated"), errors="coerce"),
+            "ring_buy": item.get("buyPrice"),
+            "ring_sell": item.get("sellPrice"),
+        }
+        for item in ring_hist
+    ]
 
-    # --- Rename columns ---
-    bar = bar.rename(columns={"buyPrice": "bar_buy", "sellPrice": "bar_sell"})
-    ring = ring.rename(columns={"buyPrice": "ring_buy", "sellPrice": "ring_sell"})
+    df_bar = pd.DataFrame(bar_records).dropna(subset=["date"]).sort_values("date")
+    df_ring = pd.DataFrame(ring_records).dropna(subset=["date"]).sort_values("date")
 
-    # --- Combine two DataFrames ---
-    df = pd.merge(
-        bar[["date", "bar_buy", "bar_sell"]],
-        ring[["date", "ring_buy", "ring_sell"]],
-        on="date",
-        how="outer"
-    ).sort_values("date")
+    # 🧭 FIX: unify timezone (convert both to naive UTC-free)
+    df_bar["date"] = pd.to_datetime(df_bar["date"]).dt.tz_localize(None)
+    df_ring["date"] = pd.to_datetime(df_ring["date"]).dt.tz_localize(None)
 
-    # --- Drop rows without any valid prices ---
+    # Merge
+    df = pd.merge(df_bar, df_ring, on="date", how="outer").sort_values("date")
+
+    # Clean
     df = df.dropna(subset=["bar_buy", "bar_sell", "ring_buy", "ring_sell"], how="all")
-
-    # --- Calculate spreads and gaps ---
-    df["bar_spread"] = df["bar_sell"] - df["bar_buy"]
-    df["ring_spread"] = df["ring_sell"] - df["ring_buy"]
-    df["bar_ring_gap"] = df["bar_sell"] - df["ring_sell"]
-
-    # --- Final clean ---
     df = df.reset_index(drop=True)
-    print(f"✅ Cleaned {len(df)} gold price rows.")
+    print(f"✅ Retrieved {len(df)} rows of gold data.")
     return df
 
 
-# ============================================================
-# 2️⃣ SAVE + UPLOAD TO R2
-# ============================================================
-if __name__ == "__main__":
-    df = fetch_gold()
+# ======================================================
+# 2️⃣ INCREMENTAL UPDATE LOGIC
+# ======================================================
+def incremental_update(new_df, local_path):
+    """
+    Merge new CaféF data with the latest existing file (if exists),
+    keeping only unique date entries.
+    """
+    if os.path.exists(local_path):
+        old_df = pd.read_parquet(local_path)
+        before = len(old_df)
+        combined = pd.concat([old_df, new_df], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
+        after = len(combined)
+        print(f"📈 Incremental update: {after - before} new rows added.")
+    else:
+        combined = new_df
+        print(f"🆕 First-time load: {len(new_df)} rows saved.")
+    return combined
 
+
+# ======================================================
+# 3️⃣ MAIN SCRIPT
+# ======================================================
+def update_gold_prices():
     today = datetime.now().strftime("%d%m%y")
     parquet_path = SAVE_DIR / f"gold_price_{today}.parquet"
-    df.to_parquet(parquet_path, index=False, compression="gzip")
-    print(f"💾 Saved Parquet locally → {parquet_path}")
 
-    # --- Upload to R2 ---
-    bucket = os.getenv("R2_BUCKET")
-    prefix_main = "cafef_data/"
-    prefix_backup = "cafef_data/cafef_data_backup/"
+    # --- Fetch new data
+    new_df = fetch_gold_data()
 
-    upload_to_r2(parquet_path, bucket, f"{prefix_main}{parquet_path.name}")
-    clean_old_backups_r2(bucket, prefix_backup, keep=2)
+    # --- Merge incrementally with existing local data
+    combined_df = incremental_update(new_df, parquet_path)
 
-    print(f"☁️ Uploaded and cleaned backups on R2 → {parquet_path.name}")
-    print("🎯 Gold price update completed successfully.")
+    # --- Save as compressed Parquet
+    combined_df.to_parquet(parquet_path, index=False, compression="gzip")
+    print(f"💾 Saved Parquet → {parquet_path} ({len(combined_df)} rows)")
+
+    # --- Upload to R2
+    upload_to_r2(parquet_path, BUCKET, f"{PREFIX_MAIN}{parquet_path.name}")
+
+    # --- Keep 2 backups only
+    clean_old_backups_r2(BUCKET, PREFIX_BACKUP, keep=2)
+    print("☁️ Uploaded new gold data and cleaned old backups.")
+
+
+# ======================================================
+# 4️⃣ ENTRY POINT
+# ======================================================
+if __name__ == "__main__":
+    update_gold_prices()
+    print("✅ Gold price update completed successfully.")
