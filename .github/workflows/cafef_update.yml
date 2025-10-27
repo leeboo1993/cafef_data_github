@@ -1,7 +1,7 @@
 # ============================================================
 # 📅 Daily CaféF Data Update to Cloudflare R2
 # ============================================================
-name: Daily CaféF Data Update
+name: Daily CaféF Data Update to R2
 
 # ============================================================
 # ⚙️ Schedule and manual trigger
