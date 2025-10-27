@@ -81,7 +81,7 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           echo "🚀 Running gold price updater..."
-          python gold_price_download.py
+          python gold_price_scraper.py
 
       # --------------------------------------------------------
       # 7️⃣ Run Vietnamnet Deposit Rate Scraper
