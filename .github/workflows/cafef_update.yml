@@ -1,66 +1,107 @@
 # ============================================================
-# 📅 Daily CaféF Data Update to Cloudflare R2
+# 📅 DAILY CAFEF & VIETNAMNET DATA UPDATER
 # ============================================================
-name: Daily CaféF Data Update to R2
+name: Daily CaféF + Gold + Deposit Rate Data Update
 
 # ============================================================
-# ⚙️ Schedule and manual trigger
+# ⚙️ Schedule + Manual Run
 # ============================================================
 on:
   schedule:
-    # 20:00 Vietnam time (13:00 UTC)
-    - cron: '0 13 * * *'
-  workflow_dispatch:  # allow manual runs
+    # Run daily at 13:00 UTC = 20:00 Vietnam time (UTC+7)
+    - cron: "0 13 * * *"
+  workflow_dispatch:
 
 # ============================================================
-# 💻 Main job
+# 💻 MAIN JOB
 # ============================================================
 jobs:
   update:
     runs-on: ubuntu-latest
     permissions:
-      contents: read   # no push needed anymore (we upload to R2)
+      contents: read
 
     steps:
       # --------------------------------------------------------
-      # 1️⃣ Checkout repository
+      # 1️⃣ Checkout code
       # --------------------------------------------------------
       - name: 🧭 Checkout repository
         uses: actions/checkout@v4
 
       # --------------------------------------------------------
-      # 2️⃣ Setup Python
+      # 2️⃣ Setup Python 3.11
       # --------------------------------------------------------
-      - name: 🐍 Set up Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       # --------------------------------------------------------
       # 3️⃣ Install dependencies
       # --------------------------------------------------------
       - name: 📦 Install dependencies
         run: |
-          pip install pandas pyarrow boto3 requests
+          python -m pip install --upgrade pip
+          pip install pandas pyarrow boto3 playwright beautifulsoup4 requests
+          playwright install chromium
 
       # --------------------------------------------------------
-      # 4️⃣ Run the CaféF updater script
+      # 4️⃣ Export Cloudflare R2 credentials
       # --------------------------------------------------------
-      - name: 🚀 Run CaféF updater and upload to R2
+      - name: 🔐 Setup environment
         env:
-          # These secrets come from your GitHub repo → Settings → Secrets → Actions
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: broker-data
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
+          echo "✅ R2 credentials loaded into environment."
+
+      # --------------------------------------------------------
+      # 5️⃣ Run CaféF Stock Price Downloader
+      # --------------------------------------------------------
+      - name: 💹 Run CaféF stock price updater
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running stock price updater..."
           python cafef_data_stock_price_download.py
 
       # --------------------------------------------------------
-      # 5️⃣ Upload artifact (optional backup in GitHub Actions)
+      # 6️⃣ Run Gold Price Downloader
       # --------------------------------------------------------
-      - name: 📤 Upload local Parquet artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cafef-data
-          path: cafef_price/*.parquet
+      - name: 🪙 Run Gold price updater
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running gold price updater..."
+          python gold_price_download.py
+
+      # --------------------------------------------------------
+      # 7️⃣ Run Vietnamnet Deposit Rate Scraper
+      # --------------------------------------------------------
+      - name: 🏦 Run Deposit Rate scraper
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running deposit rate scraper..."
+          python vietnamnet_interest_rate.py
+
+      # --------------------------------------------------------
+      # 8️⃣ Final confirmation log
+      # --------------------------------------------------------
+      - name: ✅ Summary
+        run: |
+          echo "🎯 All data updated successfully and uploaded to R2:"
+          echo "  - Stock prices → cafef_data/"
+          echo "  - Gold prices  → cafef_data/"
+          echo "  - Deposit rate → cafef_data/"

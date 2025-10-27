@@ -1,4 +1,6 @@
 pandas
 requests
-pyarrow
+playwright
+beautifulsoup4
 boto3
+pyarrow
