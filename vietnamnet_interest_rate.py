@@ -344,4 +344,4 @@ def run_deposit_rate_scraper(start_date=None, end_date=None, headless=True):
 # MANUAL RUN
 # ============================================================
 if __name__ == "__main__":
-    run_deposit_rate_scraper()
+    run_deposit_rate_scraper(start_date="2025-10-25")
