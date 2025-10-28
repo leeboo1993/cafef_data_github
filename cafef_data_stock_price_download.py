@@ -194,7 +194,7 @@ def update_vn_trading_data(max_days_back=7):
         new_df = combine_trading_data(valid)
         cutoff = datetime.now() - timedelta(days=730)
         new_df = new_df[new_df["date"] >= cutoff]
-        new_df.to_parquet(parquet_path, index=False, compression="gzip")
+        new_df.to_parquet(parquet_path, index=False)
 
         print(f"💾 Saved Parquet → {parquet_path} ({len(new_df)} rows)")
 
