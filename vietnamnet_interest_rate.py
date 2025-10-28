@@ -5,10 +5,7 @@ from pathlib import Path
 import os
 
 def load_env_safely():
-    """
-    Load .env if running locally (no env vars pre-set).
-    Skip if running on CI/CD, Render, or VPS where env vars exist.
-    """
+    """Load .env if running locally (skip in CI/CD where env vars exist)."""
     if not os.getenv("R2_BUCKET"):
         from dotenv import load_dotenv
         env_path = Path(__file__).resolve().parent / ".env"
@@ -65,17 +62,6 @@ SEARCH_URL_TEMPLATE = (
 # ============================================================
 # 3️⃣ HELPER FUNCTIONS
 # ============================================================
-def clean_r2_cache(bucket, prefix):
-    """Delete old deposit_rate_*.parquet before check/upload."""
-    s3 = r2_client()
-    keys = list_r2_files(bucket, prefix)
-    targets = [k for k in keys if "deposit_rate_" in k and k.endswith(".parquet")]
-    for key in targets:
-        s3.delete_object(Bucket=bucket, Key=key)
-        print(f"🗑️ Deleted old cache: {key}")
-    if not targets:
-        print("🧭 No old cache found on R2.")
-
 def extract_date_from_name(name):
     m = re.search(r"(\d{6})\.parquet$", name)
     return datetime.strptime(m.group(1), "%d%m%y") if m else None
@@ -114,9 +100,7 @@ def safe_float(cell_text):
     txt = cell_text.strip().replace(",", ".").replace("%", "")
     try:
         val = float(txt)
-        if val > 100:
-            return None
-        return val
+        return val if val <= 100 else None
     except:
         return None
 
@@ -322,32 +306,23 @@ def sync_to_r2(today_ddmmyy, master_path):
         upload_to_r2(p, BUCKET, f"{PREFIX_BACKUP_INDIV}{p.name}")
     print("📤 All deposit rate files synced.")
 
-    # =====================================================
-    # 🧹 NEW: Remove all local & GitHub cache after upload
-    # =====================================================
-    local_cache_dirs = [Path.cwd(), SAVE_DIR, Path.cwd() / ".cache", Path.cwd() / "__pycache__"]
-    for d in local_cache_dirs:
-        if d.exists():
-            for f in d.glob("deposit_rate_*.parquet"):
-                try:
-                    os.remove(f)
-                    print(f"🧹 Deleted cached file: {f}")
-                except Exception as e:
-                    print(f"⚠️ Could not delete {f}: {e}")
+    # 🧹 Local cleanup after upload (safe)
     try:
-        if SAVE_DIR.exists() and not any(SAVE_DIR.iterdir()):
+        for f in SAVE_DIR.glob("deposit_rate_*.parquet"):
+            os.remove(f)
+            print(f"🧹 Deleted local file: {f}")
+        if not any(SAVE_DIR.iterdir()):
             SAVE_DIR.rmdir()
             print(f"🗑️ Removed empty folder: {SAVE_DIR}")
     except Exception as e:
-        print(f"⚠️ Folder cleanup error: {e}")
+        print(f"⚠️ Cleanup error: {e}")
 
 
 # ============================================================
 # 7️⃣ ENTRYPOINT
 # ============================================================
 def run_deposit_rate_scraper(start_date=None, end_date=None, headless=True):
-    """Unified flow: clean cache, skip if up-to-date, scrape new data, build + upload master."""
-    clean_r2_cache(BUCKET, PREFIX_MAIN)
+    """Unified flow: skip if up-to-date, scrape new data, build + upload master."""
     latest_key, latest_dt = get_latest_valid_file(BUCKET, PREFIX_MAIN, "deposit_rate_")
     if latest_dt and latest_dt.date() >= datetime.now().date():
         print(f"✅ Already up-to-date ({latest_dt.strftime('%d/%m/%Y')}) — skip.")

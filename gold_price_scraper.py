@@ -19,7 +19,6 @@ from utils_r2 import (
     upload_to_r2,
     clean_old_backups_r2,
     list_r2_files,
-    r2_client,
 )
 
 # ======================================================
@@ -38,7 +37,7 @@ PREFIX_BACKUP = "cafef_data/cafef_data_backup/gold_price/"
 print("🪙 Fetching SJC gold data (incremental update, no spreads)...")
 
 # ======================================================
-# 1️⃣ FETCH GOLD DATA FROM CAFEF (robust mixed timestamp parsing)
+# 1️⃣ FETCH GOLD DATA FROM CAFEF
 # ======================================================
 def fetch_gold_data():
     urls = {
@@ -91,25 +90,7 @@ def fetch_gold_data():
 
 
 # ======================================================
-# 2️⃣ CLEAN R2 CACHE
-# ======================================================
-def clean_r2_cache(bucket, prefix):
-    """Delete old gold_price_*.parquet files from R2 before uploading new."""
-    s3 = r2_client()
-    existing_files = list_r2_files(bucket, prefix)
-    old_files = [f for f in existing_files if "gold_price_" in f and f.endswith(".parquet")]
-
-    if not old_files:
-        print("🧭 No old cache files found on R2.")
-        return
-
-    for key in old_files:
-        s3.delete_object(Bucket=bucket, Key=key)
-        print(f"🗑️ Deleted old cache file on R2: {key}")
-
-
-# ======================================================
-# 3️⃣ INCREMENTAL UPDATE LOGIC
+# 2️⃣ INCREMENTAL UPDATE LOGIC
 # ======================================================
 def incremental_update(new_df, local_path):
     """Merge new data with existing local parquet (if present)."""
@@ -127,7 +108,7 @@ def incremental_update(new_df, local_path):
 
 
 # ======================================================
-# 4️⃣ CHECK IF UPDATE NEEDED (skip logic)
+# 3️⃣ CHECK IF UPDATE NEEDED (skip logic)
 # ======================================================
 def latest_r2_date(bucket, prefix):
     """Return latest date from file name on R2 (gold_price_DDMMYY.parquet)."""
@@ -145,7 +126,7 @@ def latest_r2_date(bucket, prefix):
 
 
 # ======================================================
-# 5️⃣ MAIN SCRIPT
+# 4️⃣ MAIN SCRIPT
 # ======================================================
 def update_gold_prices():
     today = datetime.now()
@@ -158,16 +139,13 @@ def update_gold_prices():
         print(f"✅ Already up-to-date ({latest_remote.strftime('%d/%m/%Y')}) → skip download.")
         return
 
-    # --- 🔥 NEW SECTION: Clean any local or GitHub cache first ---
-    local_cache_dirs = [Path.cwd(), SAVE_DIR, Path.cwd() / ".cache", Path.cwd() / "__pycache__"]
-    for d in local_cache_dirs:
-        if d.exists():
-            for f in d.glob("gold_price_*.parquet"):
-                try:
-                    os.remove(f)
-                    print(f"🧹 Deleted cached file: {f}")
-                except Exception as e:
-                    print(f"⚠️ Could not delete {f}: {e}")
+    # --- 🧹 Clean local/GitHub cache before rebuild ---
+    for f in SAVE_DIR.glob("gold_price_*.parquet"):
+        try:
+            os.remove(f)
+            print(f"🧹 Deleted old local cache file: {f}")
+        except Exception as e:
+            print(f"⚠️ Could not delete {f}: {e}")
 
     # --- Fetch new data ---
     df = fetch_gold_data()
@@ -179,18 +157,15 @@ def update_gold_prices():
     combined.to_parquet(parquet_path, index=False, compression="gzip")
     print(f"💾 Saved Parquet → {parquet_path} ({len(combined)} rows)")
 
-    # --- Clean old cache on R2 ---
-    clean_r2_cache(BUCKET, PREFIX_MAIN)
-
     # --- Upload new file ---
     upload_to_r2(parquet_path, BUCKET, f"{PREFIX_MAIN}{parquet_path.name}")
 
-    # --- Clean old backups ---
+    # --- Keep 2 backups on R2 ---
     clean_old_backups_r2(BUCKET, PREFIX_BACKUP, keep=2)
 
-    print("☁️ Uploaded new gold data and cleaned old backups.")
+    print("☁️ Uploaded new gold data and maintained backup rotation.")
 
-    # --- Local cleanup ---
+    # --- 🧹 Final local cleanup ---
     try:
         for f in SAVE_DIR.glob("*.parquet"):
             os.remove(f)
@@ -203,7 +178,7 @@ def update_gold_prices():
 
 
 # ======================================================
-# 6️⃣ ENTRY POINT
+# 5️⃣ ENTRY POINT
 # ======================================================
 if __name__ == "__main__":
     update_gold_prices()
