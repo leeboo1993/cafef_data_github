@@ -8,7 +8,7 @@ name: Daily CaféF + Gold + Deposit Rate Data Update
 # ============================================================
 on:
   schedule:
-    # Run daily at 13:00 UTC = 20:00 Vietnam time (UTC+7)
+    # Run daily at 13:00 UTC = 20:00 Vietnam time (GMT+7)
     - cron: "0 13 * * *"
   workflow_dispatch:
 
