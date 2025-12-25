@@ -33,6 +33,18 @@ def upload_to_r2(local_path, bucket, key):
     s3.upload_file(local_path, bucket, key)
     print(f"☁️ Uploaded → s3://{bucket}/{key}")
 
+def download_from_r2(bucket, key, local_path):
+    """Download file from R2 to local path."""
+    s3 = r2_client()
+    try:
+        s3.download_file(bucket, key, local_path)
+        print(f"⬇️ Downloaded {key} → {local_path}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Could not download {key}: {e}")
+        return False
+
+
 def ensure_folder_exists(bucket, folder):
     s3 = r2_client()
     if not list_r2_files(bucket, folder):

@@ -1,6 +1,2 @@
-pandas
-requests
 playwright
-beautifulsoup4
 boto3
-pyarrow
