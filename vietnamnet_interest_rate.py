@@ -435,7 +435,7 @@ def sync_to_r2(combined_df, local_only=False):
         deposit_files = [f for f in current_files if 'deposit_rate_' in f and (f.endswith('.json') or f.endswith('.csv'))]
         
         # Move current files to backup (only if they're different from what we're uploading)
-        backup_prefix = f"{PREFIX_MAIN}deposit_rate_backup/"
+        backup_prefix = f"{PREFIX_MAIN}deposit_rate/deposit_rate_backup/"
         s3 = r2_client()
         
         for old_file in deposit_files:
@@ -474,8 +474,8 @@ def sync_to_r2(combined_df, local_only=False):
         
         # Upload new files
         ensure_folder_exists(BUCKET, PREFIX_MAIN)
-        upload_to_r2(str(json_path), BUCKET, f"{PREFIX_MAIN}deposit_rate_{date_suffix}.json")
-        upload_to_r2(str(csv_path), BUCKET, f"{PREFIX_MAIN}deposit_rate_{date_suffix}.csv")
+        upload_to_r2(str(json_path), BUCKET, f"{PREFIX_MAIN}deposit_rate/deposit_rate_{date_suffix}.json")
+        upload_to_r2(str(csv_path), BUCKET, f"{PREFIX_MAIN}deposit_rate/deposit_rate_{date_suffix}.csv")
         print(f"📤 All deposit rate files synced to R2 with date suffix: {date_suffix}")
 
         # Clean up local files
