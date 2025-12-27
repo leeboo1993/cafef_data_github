@@ -106,13 +106,13 @@ async def _scrape_vcb_fx(
 
     async with async_playwright() as p:
 
-        # --- FIX: Firefox avoids HTTP2 reset ---
-        browser = await p.firefox.launch(headless=headless)
+        # Use Chromium for better CI compatibility
+        browser = await p.chromium.launch(headless=headless)
 
         context = await browser.new_context(
             user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) "
-                "Gecko/20100101 Firefox/128.0"
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             ),
             locale="vi-VN",
             viewport={"width": 1400, "height": 900},
