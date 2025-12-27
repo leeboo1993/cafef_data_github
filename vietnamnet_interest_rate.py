@@ -435,7 +435,7 @@ def sync_to_r2(combined_df, local_only=False):
         deposit_files = [f for f in current_files if 'deposit_rate_' in f and (f.endswith('.json') or f.endswith('.csv'))]
         
         # Move current files to backup (only if they're different from what we're uploading)
-        backup_prefix = f"{PREFIX_MAIN}deposit_rate/deposit_rate_backup/"
+        backup_prefix = f"{PREFIX_MAIN}deposit_rate_backup/"
         s3 = r2_client()
         
         for old_file in deposit_files:
@@ -443,8 +443,9 @@ def sync_to_r2(combined_df, local_only=False):
             if date_suffix in old_file:
                 continue
             
-            # Move to backup
-            backup_key = old_file.replace(PREFIX_MAIN, backup_prefix)
+            # Extract just the filename from the old file path
+            filename = old_file.split('/')[-1]
+            backup_key = f"{backup_prefix}{filename}"
             s3.copy_object(
                 Bucket=BUCKET,
                 CopySource={'Bucket': BUCKET, 'Key': old_file},
