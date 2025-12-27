@@ -314,8 +314,9 @@ def update_gold_prices(local_only=False):
             if date_suffix in old_file:
                 continue
             
-            # Move to backup
-            backup_key = old_file.replace(PREFIX_MAIN, backup_prefix)
+            # Extract just the filename from the old file path
+            filename = old_file.split('/')[-1]
+            backup_key = f\"{backup_prefix}{filename}\"
             s3.copy_object(
                 Bucket=BUCKET,
                 CopySource={'Bucket': BUCKET, 'Key': old_file},
