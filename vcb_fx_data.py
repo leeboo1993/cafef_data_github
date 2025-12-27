@@ -104,6 +104,29 @@ async def _scrape_vcb_fx(
 
     print(f"Loaded existing dates: {len(existing_dates)}")
 
+    # Try to download existing data from R2 first to prevent overwriting history
+    try:
+        import os
+        if all([os.getenv("R2_ENDPOINT"), os.getenv("R2_ACCESS_KEY_ID"), 
+                os.getenv("R2_SECRET_ACCESS_KEY"), os.getenv("R2_BUCKET")]):
+            from utils_r2 import download_from_r2
+            bucket = os.getenv("R2_BUCKET")
+            r2_key = f"cafef_data/vcb_fx_data/vcb_fx_data.csv"
+            
+            # Create directory if it doesn't exist
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            if download_from_r2(bucket, r2_key, str(out_path)):
+                print(f"✅ Downloaded existing data from R2: {r2_key}")
+                # Reload existing dates after download
+                existing_dates = load_existing_dates(out_path)
+                print(f"✅ Loaded {len(existing_dates)} existing dates after R2 sync")
+                first_write = False # File exists now
+            else:
+                print(f"ℹ️ No existing data found on R2: {r2_key}")
+    except Exception as e:
+        print(f"⚠️ R2 download failed (starting fresh): {e}")
+
     async with async_playwright() as p:
 
         # Use Firefox to avoid HTTP/2 protocol errors with VietcomBank website

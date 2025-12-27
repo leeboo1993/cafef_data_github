@@ -296,6 +296,23 @@ async def scrape_vsd_accounts(start_date=None, end_date=None, headless=True):
     start_i = month_to_int(start_date) if start_date else None
     end_i = month_to_int(end_date) if end_date else None
 
+    # Try to download from R2 first
+    try:
+        if all([os.getenv("R2_ENDPOINT"), os.getenv("R2_ACCESS_KEY_ID"), 
+                os.getenv("R2_SECRET_ACCESS_KEY"), os.getenv("R2_BUCKET")]):
+            from utils_r2 import download_from_r2
+            bucket = os.getenv("R2_BUCKET")
+            r2_key = f"cafef_data/stock_trading_account/stock_trading_account.csv"
+            
+            # Create directory if it doesn't exist
+            from pathlib import Path
+            Path(CSV_FILE).parent.mkdir(parents=True, exist_ok=True)
+            
+            if download_from_r2(bucket, r2_key, CSV_FILE):
+                 print(f"✅ Downloaded existing data from R2: {r2_key}")
+    except Exception as e:
+        print(f"⚠️ R2 download failed: {e}")
+
     existing = load_existing()
 
     async with async_playwright() as p:

@@ -201,7 +201,12 @@ def normalize_rate_table(html, fallback_date):
 def load_existing_json_data(bucket, prefix):
     """Load existing deposit rate JSON from R2."""
     files = list_r2_files(bucket, prefix)
-    json_files = [f for f in files if f.endswith("deposit_rate.json")]
+    # Filter for files matching pattern deposit_rate_YYMMDD.json
+    json_files = [f for f in files if re.search(r"deposit_rate_\d{6}\.json$", f)]
+    
+    # Sort to get the latest one (YYMMDD format sorts correctly as string if year is consistent 2-digit, 
+    # but safer to parse date if needed. Given format 251227, string sort works for same decade)
+    json_files.sort(reverse=True)
     
     if not json_files:
         print("ℹ️ No existing deposit rate JSON found on R2.")

@@ -221,6 +221,29 @@ def usd_vnd_black_market(
     csv_path=CSV_PATH,
     update=False,
 ):
+    # ======================================================
+    # DOWNLOAD FROM R2 FIRST
+    # ======================================================
+    import os
+    if update: # Only download if we intend to update/append
+        try:
+            if all([os.getenv("R2_ENDPOINT"), os.getenv("R2_ACCESS_KEY_ID"), 
+                    os.getenv("R2_SECRET_ACCESS_KEY"), os.getenv("R2_BUCKET")]):
+                from utils_r2 import download_from_r2
+                bucket = os.getenv("R2_BUCKET")
+                r2_key = f"cafef_data/usd_black_market/usd_market_data.csv"
+                
+                # Create directory if it doesn't exist
+                from pathlib import Path
+                Path(csv_path).parent.mkdir(parents=True, exist_ok=True)
+                
+                if download_from_r2(bucket, r2_key, csv_path):
+                    print(f"✅ Downloaded existing data from R2: {r2_key}")
+                else:
+                    print(f"ℹ️ No existing data found on R2: {r2_key}")
+        except Exception as e:
+            print(f"⚠️ R2 download failed: {e}")
+
     # Parse input dates
     if start_date is None:
         start = EARLIEST_DATE
