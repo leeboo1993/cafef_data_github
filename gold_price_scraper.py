@@ -301,12 +301,18 @@ def update_gold_prices(local_only=False):
         # Before uploading new files, move current files to backup
         from utils_r2 import list_r2_files
         
-        # List current files
-        current_files = list_r2_files(BUCKET, PREFIX_MAIN)
-        gold_files = [f for f in current_files if 'gold_price_' in f and (f.endswith('.json') or f.endswith('.csv'))]
+        # List current files - only in the main gold_price folder, not in backup subfolders
+        current_files = list_r2_files(BUCKET, f"{PREFIX_MAIN}gold_price/")
+        # Filter to only files directly in gold_price/, exclude backup subfolder
+        gold_files = [
+            f for f in current_files 
+            if 'gold_price_' in f 
+            and (f.endswith('.json') or f.endswith('.csv'))
+            and 'backup' not in f  # Exclude files already in any backup folders
+        ]
         
         # Move current files to backup (only if they're different from what we're uploading)
-        backup_prefix = f"{PREFIX_MAIN}gold_price/gold_price_backup/"
+        backup_prefix = f"{PREFIX_MAIN}gold_price_backup/"
         s3 = r2_client()
         
         for old_file in gold_files:

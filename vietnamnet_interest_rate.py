@@ -430,9 +430,15 @@ def sync_to_r2(combined_df, local_only=False):
         # Before uploading new files, move current files to backup
         from utils_r2 import r2_client
         
-        # List current files
-        current_files = list_r2_files(BUCKET, PREFIX_MAIN)
-        deposit_files = [f for f in current_files if 'deposit_rate_' in f and (f.endswith('.json') or f.endswith('.csv'))]
+        # List current files - only in the main deposit_rate folder, not in backup subfolders
+        current_files = list_r2_files(BUCKET, f"{PREFIX_MAIN}deposit_rate/")
+        # Filter to only files directly in deposit_rate/, exclude backup subfolder
+        deposit_files = [
+            f for f in current_files 
+            if 'deposit_rate_' in f 
+            and (f.endswith('.json') or f.endswith('.csv'))
+            and 'backup' not in f  # Exclude files already in any backup folders
+        ]
         
         # Move current files to backup (only if they're different from what we're uploading)
         backup_prefix = f"{PREFIX_MAIN}deposit_rate_backup/"
