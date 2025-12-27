@@ -1,2 +1,7 @@
-playwright
+pandas
+pyarrow
 boto3
+playwright
+beautifulsoup4
+requests
+python-dotenv
