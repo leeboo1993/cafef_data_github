@@ -298,6 +298,7 @@ async def scrape_vsd_accounts(start_date=None, end_date=None, headless=True):
 
     # Try to download from R2 first
     try:
+        import os
         if all([os.getenv("R2_ENDPOINT"), os.getenv("R2_ACCESS_KEY_ID"), 
                 os.getenv("R2_SECRET_ACCESS_KEY"), os.getenv("R2_BUCKET")]):
             from utils_r2 import download_from_r2
