@@ -1,7 +1,7 @@
 # ============================================================
-# 📅 DAILY CAFEF & VIETNAMNET DATA UPDATER
+# 📅 DAILY DATA UPDATER - ALL SOURCES
 # ============================================================
-name: Daily CaféF + Gold + Deposit Rate Data Update
+name: Daily CaféF + Gold + Deposit + VCB FX + USD + Trading Account Update
 
 # ============================================================
 # ⚙️ Schedule + Manual Run
@@ -99,11 +99,64 @@ jobs:
           python vietnamnet_interest_rate.py --start_date=$START_DATE
 
       # --------------------------------------------------------
-      # 8️⃣ Final confirmation log
+      # 8️⃣ Run VCB FX Data Scraper (T-5 to today)
+      # --------------------------------------------------------
+      - name: 💱 Run VCB FX data scraper
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running VCB FX scraper (T-5 to today)..."
+          python vcb_fx_data.py
+
+      # --------------------------------------------------------
+      # 9️⃣ Run USD Black Market Scraper (T-5 to today)
+      # --------------------------------------------------------
+      - name: 💵 Run USD Black Market scraper
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running USD Black Market scraper (T-5 to today)..."
+          python usd_black_market.py
+
+      # --------------------------------------------------------
+      # 🔟 Run Trading Account Scraper (last 6 months)
+      # --------------------------------------------------------
+      - name: 📊 Run Trading Account scraper
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running Trading Account scraper (last 6 months)..."
+          python trading_account.py
+
+      # --------------------------------------------------------
+      # 1️⃣1️⃣ Commit and push changes
+      # --------------------------------------------------------
+      - name: 💾 Commit and push CSV changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add vcb_fx_data/vcb_fx_data.csv usd_black_market/usd_market_data.csv stock_trading_account/stock_trading_account.csv
+          git diff --staged --quiet || git commit -m "🤖 Auto-update: VCB FX, USD & Trading Account data ($(date +'%Y-%m-%d'))"
+          git push
+
+      # --------------------------------------------------------
+      # 1️⃣2️⃣ Final confirmation log
       # --------------------------------------------------------
       - name: ✅ Summary
         run: |
           echo "🎯 All data updated successfully and uploaded to R2:"
-          echo "  - Stock prices → cafef_data/"
-          echo "  - Gold prices  → cafef_data/"
-          echo "  - Deposit rate → cafef_data/"
+          echo "  - Stock prices      → cafef_data/"
+          echo "  - Gold prices       → cafef_data/"
+          echo "  - Deposit rate      → cafef_data/"
+          echo "  - VCB FX data       → cafef_data/ + R2"
+          echo "  - USD Black Market  → cafef_data/ + R2"
+          echo "  - Trading Account   → cafef_data/ + R2"
