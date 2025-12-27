@@ -64,6 +64,10 @@ def load_existing() -> Dict[str, Dict]:
 
 
 def rewrite_all(rows: Dict[str, Dict]):
+    from pathlib import Path
+    # Create directory if it doesn't exist
+    Path(CSV_FILE).parent.mkdir(parents=True, exist_ok=True)
+    
     with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDS)
         writer.writeheader()

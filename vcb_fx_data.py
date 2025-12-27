@@ -144,6 +144,8 @@ async def _scrape_vcb_fx(
 
         # Write header
         if first_write:
+            # Create directory if it doesn't exist
+            out_path.parent.mkdir(parents=True, exist_ok=True)
             with out_path.open("w", newline="", encoding="utf-8-sig") as f:
                 csv.writer(f).writerow(
                     ["date", "ticker", "name", "cash_buy", "deposit_buy", "sell"]

@@ -169,6 +169,10 @@ def write_csv_rows(rows, csv_path=CSV_PATH):
 
 
 def append_to_csv(row, csv_path=CSV_PATH):
+    from pathlib import Path
+    # Create directory if it doesn't exist
+    Path(csv_path).parent.mkdir(parents=True, exist_ok=True)
+    
     exists = os.path.exists(csv_path)
     with open(csv_path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
