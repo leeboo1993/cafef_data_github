@@ -316,7 +316,7 @@ def update_gold_prices(local_only=False):
             
             # Extract just the filename from the old file path
             filename = old_file.split('/')[-1]
-            backup_key = f\"{backup_prefix}{filename}\"
+            backup_key = f"{backup_prefix}{filename}"
             s3.copy_object(
                 Bucket=BUCKET,
                 CopySource={'Bucket': BUCKET, 'Key': old_file},
