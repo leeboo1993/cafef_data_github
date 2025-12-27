@@ -42,7 +42,7 @@ jobs:
       - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas pyarrow boto3 playwright beautifulsoup4 requests
+          pip install -r requirements.txt
           playwright install --with-deps firefox chromium
 
       # --------------------------------------------------------
