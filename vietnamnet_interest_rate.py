@@ -704,6 +704,7 @@ def run_deposit_rate_scraper(start_date=None, end_date=None, headless=True, loca
             page = await browser.new_page()
             page_num = 1
             keep = True
+            empty_pages_consecutive = 0
 
             while keep:
                 # Calculate 0-based index

@@ -36,32 +36,33 @@ def clean_number(text: str):
 # ======================================================
 def scrape_black_market(date_str: str):
     url = f"https://tygiausd.org/TyGia?date={date_str}"
-    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    date_input = soup.find("input", {"id": "date"})
-    if not date_input:
-        return None
-
-    date_val = date_input.get("value")
-
     try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        date_input = soup.find("input", {"id": "date"})
+        if not date_input:
+            return None
+
+        date_val = date_input.get("value")
+
         row = soup.find("strong", string="USD tự do").find_parent("tr")
         tds = row.find_all("td")
         buy = clean_number(tds[0].get_text(" ", strip=True))
         sell = clean_number(tds[1].get_text(" ", strip=True))
-    except Exception:
-        return None
 
-    if buy is None or sell is None:
-        return None
+        if buy is None or sell is None:
+            return None
 
-    return {
-        "date": date_val,
-        "usd_buy_black_market": buy,
-        "usd_sell_black_market": sell,
-        "gap_black_market": sell - buy,
-    }
+        return {
+            "date": date_val,
+            "usd_buy_black_market": buy,
+            "usd_sell_black_market": sell,
+            "gap_black_market": sell - buy,
+        }
+    except Exception as e:
+        print(f"⚠️ Error scraping black market for {date_str}: {e}")
+        return None
 
 
 # ======================================================
@@ -78,62 +79,66 @@ def normalize(text):
 
 def scrape_bank_usd(date_str: str):
     url = f"https://tygiausd.org/TyGia?date={date_str}"
-    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-    soup = BeautifulSoup(r.text, "html.parser")
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        soup = BeautifulSoup(r.text, "html.parser")
 
-    usd_tag = soup.find(
-        lambda tag: tag.name in ["strong", "a"] and tag.get_text(strip=True) == "USD"
-    )
-    if not usd_tag:
+        usd_tag = soup.find(
+            lambda tag: tag.name in ["strong", "a"] and tag.get_text(strip=True) == "USD"
+        )
+        if not usd_tag:
+            return None
+
+        row = usd_tag.find_parent("tr")
+        table = row.find_parent("table")
+        if not table:
+            return None
+
+        # Find header row
+        header_tr = None
+        for tr in table.find_all("tr"):
+            raw = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+            if any("Mã NT" in h for h in raw) or any("Mua vào" in h for h in raw):
+                header_tr = tr
+                break
+
+        if not header_tr:
+            return None
+
+        headers = [
+            normalize(c.get_text(" ", strip=True))
+            for c in header_tr.find_all(["th", "td"])
+        ]
+
+        buy_idx = sell_idx = deposit_idx = None
+        for idx, h in enumerate(headers):
+            if "mua" in h:
+                buy_idx = idx
+            elif "ban" in h:
+                sell_idx = idx
+            elif "chuyen" in h:
+                deposit_idx = idx
+
+        if buy_idx is None or sell_idx is None:
+            return None
+
+        cells = row.find_all(["td", "th"])
+        buy = clean_number(cells[buy_idx].get_text(" ", strip=True))
+        sell = clean_number(cells[sell_idx].get_text(" ", strip=True))
+        deposit = clean_number(cells[deposit_idx].get_text(" ", strip=True)) if deposit_idx is not None else None
+
+        if buy is None or sell is None:
+            return None
+
+        return {
+            "usd_buy_bank": buy,
+            "usd_sell_bank": sell,
+            "usd_deposit_bank": deposit,
+            "gap_bank": sell - buy,
+        }
+    except Exception as e:
+        print(f"⚠️ Error scraping bank USD for {date_str}: {e}")
         return None
-
-    row = usd_tag.find_parent("tr")
-    table = row.find_parent("table")
-    if not table:
-        return None
-
-    # Find header row
-    header_tr = None
-    for tr in table.find_all("tr"):
-        raw = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
-        if any("Mã NT" in h for h in raw) or any("Mua vào" in h for h in raw):
-            header_tr = tr
-            break
-
-    if not header_tr:
-        return None
-
-    headers = [
-        normalize(c.get_text(" ", strip=True))
-        for c in header_tr.find_all(["th", "td"])
-    ]
-
-    buy_idx = sell_idx = deposit_idx = None
-    for idx, h in enumerate(headers):
-        if "mua" in h:
-            buy_idx = idx
-        elif "ban" in h:
-            sell_idx = idx
-        elif "chuyen" in h:
-            deposit_idx = idx
-
-    if buy_idx is None or sell_idx is None:
-        return None
-
-    cells = row.find_all(["td", "th"])
-    buy = clean_number(cells[buy_idx].get_text(" ", strip=True))
-    sell = clean_number(cells[sell_idx].get_text(" ", strip=True))
-    deposit = clean_number(cells[deposit_idx].get_text(" ", strip=True)) if deposit_idx is not None else None
-
-    if buy is None or sell is None:
-        return None
-
-    return {
-        "usd_buy_bank": buy,
-        "usd_sell_bank": sell,
-        "usd_deposit_bank": deposit,
-        "gap_bank": sell - buy,
-    }
 
 
 # ======================================================
