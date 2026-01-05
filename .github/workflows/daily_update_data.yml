@@ -149,6 +149,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add vcb_fx_data/vcb_fx_data.csv usd_black_market/usd_market_data.csv stock_trading_account/stock_trading_account.csv
           git diff --staged --quiet || git commit -m "🤖 Auto-update: VCB FX, USD & Trading Account data ($(date +'%Y-%m-%d'))"
+          git pull --rebase
           git push
 
       # --------------------------------------------------------
