@@ -63,15 +63,15 @@ jobs:
       # --------------------------------------------------------
       # 5️⃣ Run CaféF Stock Price Downloader
       # --------------------------------------------------------
-      - name: 💹 Run CaféF stock price updater
+      - name: 💹 Run Unified CafeF Data Downloader
         env:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
-          echo "🚀 Running stock price updater..."
-          python cafef_data_stock_price_download.py
+          echo "🚀 Running Unified CafeF Data Downloader..."
+          python cafef_data_downloader.py
 
       # --------------------------------------------------------
       # 6️⃣ Run Gold Price Downloader
