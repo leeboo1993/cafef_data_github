@@ -107,8 +107,9 @@ def get_tickers_from_latest_stock_price(local_mode=False):
             print(f"📋 Using local ticker list from: {latest_file}")
             try:
                 df = pd.read_parquet(latest_file, columns=["ticker"])
-                # Drop NAs and ensure strings
+                # FIX: explicit conversion to match debug script which worked
                 tickers = df["ticker"].dropna().astype(str).unique().tolist()
+                print(f"✅ Found {len(tickers)} unique tickers.")
                 return sorted(tickers)
             except Exception as e:
                 print(f"⚠️ Error reading local tickers: {e}")
