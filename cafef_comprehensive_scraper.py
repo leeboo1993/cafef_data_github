@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 import sys
 import argparse
+import json
 
 def load_env_safely():
     """Load .env for local runs, skip if env vars already exist."""
@@ -54,28 +55,27 @@ CONFIG = {
         "url": "https://cafef.vn/du-lieu/Ajax/PageNew/DataHistory/GDTuDoanh.ashx",
         "r2_path": "cafef_data/proprietary_trading/all_proprietary_trading.parquet",
         "start_date_default": "01/01/2023",
-        "type": "range", 
+        "data_key_chain": ["Data", "Data", "ListDataTudoanh"], # Nested path to data list
     },
     # 2. Insider Trading (Giao dich Co dong & Noi bo)
     "insider": {
         "url": "https://cafef.vn/du-lieu/Ajax/PageNew/DataHistory/GDCoDong.ashx",
         "r2_path": "cafef_data/insider_trading/all_insider_trading.parquet",
         "start_date_default": "01/01/2023",
-        "type": "range",
+        "data_key_chain": ["Data", "Data"], # Check this if error occurs
     },
     # 3. Order Statistics (Thong ke Dat lenh -2)
     "order_stats": {
         "url": "https://cafef.vn/du-lieu/Ajax/PageNew/DataHistory/ThongKeDL.ashx",
         "r2_path": "cafef_data/order_statistics/all_order_statistics.parquet",
         "start_date_default": "01/01/2023",
-        "type": "range",
+         "data_key_chain": ["Data", "Data"], # Likely similar to others?
     },
     # 4. Tick Data (Khop lenh tung lenh -5)
     "tick_data": {
         "url": "https://msh-appdata.cafef.vn/rest-api/api/v1/MatchPrice",
         "r2_folder": "cafef_data/tick_data/",
         "file_pattern": "cafef_tick_data_{ddmmyy}.parquet",
-        "type": "daily_consolidated",
     }
 }
 
@@ -146,12 +146,26 @@ def get_tickers_from_latest_stock_price(local_mode=False):
 # -----------------------------------------------------
 # API FETCHERS
 # -----------------------------------------------------
-def fetch_cafef_range_data(url, symbol, start_date, end_date):
+def extract_data_from_json(json_data, keys):
+    """Safely traverse nested JSON using a list of keys."""
+    curr = json_data
+    for k in keys:
+        if isinstance(curr, dict) and k in curr:
+            curr = curr[k]
+        else:
+            return []
+    return curr if isinstance(curr, list) else []
+
+def fetch_cafef_range_data(url, symbol, start_date, end_date, data_key_chain=None):
     """Fetch data from CafeF AJAX endpoint (for Prop, Insider, OrderStats)."""
     all_data = []
     page_index = 1
     page_size = 1000
     
+    # Default key chain if not provided
+    if not data_key_chain:
+        data_key_chain = ["Data"]
+
     while True:
         try:
             params = {
@@ -167,8 +181,18 @@ def fetch_cafef_range_data(url, symbol, start_date, end_date):
             data = r.json()
             if not data: break
             
-            # Common pattern: Data is in "Data" key
-            rows = data.get("Data", [])
+            # Use traverse function to get the list
+            rows = extract_data_from_json(data, data_key_chain)
+            
+            # Special handling if rows is empty but maybe we used wrong keys?
+            # For Insider/OrderStats, let's try fallback to ["Data"] if strict path fails
+            if not rows and data_key_chain != ["Data"]:
+                # Fallback check
+                 rows_fallback = extract_data_from_json(data, ["Data"])
+                 # If fallback is a list of dicts, maybe that's it?
+                 if rows_fallback and isinstance(rows_fallback, list) and len(rows_fallback)>0 and isinstance(rows_fallback[0], dict):
+                     rows = rows_fallback
+
             if not rows: break
 
             all_data.extend(rows)
@@ -267,11 +291,12 @@ def update_range_dataset(data_type, tickers, local_mode=False):
             
         # Only fetch if start <= today
         if datetime.strptime(start_str, "%d/%m/%Y") <= today:
-            raw = fetch_cafef_range_data(config["url"], ticker, start_str, today_str)
+            raw = fetch_cafef_range_data(config["url"], ticker, start_str, today_str, config.get("data_key_chain"))
             if raw:
                 for row in raw:
-                    row["ticker"] = ticker
-                    new_rows.append(row)
+                    if isinstance(row, dict):
+                        row["ticker"] = ticker
+                        new_rows.append(row)
         
         if (i + 1) % 50 == 0: print(f"   ⏳ Processed {i + 1}/{len(tickers)}...")
 
@@ -376,8 +401,6 @@ def run():
     
     if args.local:
         print("🏠 RUNNING IN LOCAL MODE")
-        print("   - Using local folder 'cafef_data/' for storage")
-        print("   - Ignoring R2 upload/download")
 
     # 1. Get Tickers
     tickers = get_tickers_from_latest_stock_price(local_mode=args.local)
@@ -423,6 +446,8 @@ def run():
             print(f"🔙 Checking backfill for {args.tick_backfill_days} days...")
             for i in range(1, args.tick_backfill_days + 1):
                 past_date = today - timedelta(days=i)
+                past_date_str = past_date.strftime("%d/%m/%Y")
+                # Need to manually call update_tick_data
                 if past_date.weekday() < 5:
                     update_tick_data(tickers, past_date, local_mode=args.local)
 
