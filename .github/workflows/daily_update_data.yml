@@ -141,17 +141,18 @@ jobs:
           python trading_account.py
 
       # --------------------------------------------------------
-      # 1️⃣1️⃣ Run Proprietary & Insider Data Scraper (Incremental)
+      # 1️⃣1️⃣ Run Comprehensive Scraper (Prop, Insider, Orders, Ticks)
       # --------------------------------------------------------
-      - name: 🕵️ Run Proprietary & Insider Scraper
+      - name: 🕵️ Run Comprehensive Scraper
         env:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
-          echo "🚀 Running Proprietary & Insider Scraper..."
-          python cafef_proprietary_insider_scraper.py
+          echo "🚀 Running Comprehensive Scraper..."
+          # Run with a 3-day lookback for tick data to catch missed days
+          python cafef_comprehensive_scraper.py --tick-backfill-days 3
 
       # --------------------------------------------------------
       # 1️⃣2️⃣ Commit and push changes
