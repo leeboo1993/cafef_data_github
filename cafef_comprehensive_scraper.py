@@ -30,6 +30,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import R2 utils conditionally or mock
 try:
@@ -138,7 +139,7 @@ def get_tickers_from_latest_stock_price(local_mode=False):
     if download_from_r2(bucket, latest_file, local_path):
         try:
             df = pd.read_parquet(local_path, columns=["ticker"])
-            tickers = df["ticker"].unique().tolist()
+            tickers = df["ticker"].dropna().astype(str).unique().tolist()
             os.remove(local_path)
             return sorted(tickers)
         except Exception as e:
@@ -215,7 +216,7 @@ def fetch_tick_data(url, symbol, date_obj):
     try:
         date_str = date_obj.strftime("%Y%m%d")
         params = {"symbol": symbol, "date": date_str}
-        r = requests.get(url, params=params, headers=HEADERS, timeout=5)
+        r = requests.get(url, params=params, headers=HEADERS, timeout=15) # Increased timeout
         
         if r.status_code != 200: return None
         data = r.json()
@@ -232,9 +233,47 @@ def fetch_tick_data(url, symbol, date_obj):
         return None
 
 # -----------------------------------------------------
+# WORKER FUNCTIONS
+# -----------------------------------------------------
+def process_ticker_range_data(ticker, config, last_update_map):
+    """Worker function for single ticker range data fetch."""
+    try:
+        last_date = last_update_map.get(ticker)
+        today = datetime.now()
+        
+        if last_date:
+            start_dt = last_date + timedelta(days=1)
+            # Future protection
+            if start_dt > today: return None
+            start_str = start_dt.strftime("%d/%m/%Y")
+        else:
+            start_str = config["start_date_default"]
+            
+        # Only fetch if start <= today
+        if datetime.strptime(start_str, "%d/%m/%Y") <= today:
+            today_str = today.strftime("%d/%m/%Y")
+            # Don't hammer the API too hard in parallel
+            time.sleep(0.01) 
+            raw = fetch_cafef_range_data(config["url"], ticker, start_str, today_str, config.get("data_key_chain"))
+            
+            valid_rows = []
+            if raw:
+                for row in raw:
+                    if isinstance(row, dict):
+                        # API usually returns "Symbol", which we rename to "ticker" later.
+                        # Only add explicit "ticker" if missing to avoid duplicates.
+                        if "Symbol" not in row and "symbol" not in row:
+                            row["ticker"] = ticker
+                        valid_rows.append(row)
+            return valid_rows
+    except Exception as e:
+        pass
+    return None
+
+# -----------------------------------------------------
 # DATASET UPDATERS
 # -----------------------------------------------------
-def update_range_dataset(data_type, tickers, local_mode=False):
+def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
     config = CONFIG[data_type]
     bucket = os.getenv("R2_BUCKET")
     master_key = config["r2_path"]
@@ -267,44 +306,35 @@ def update_range_dataset(data_type, tickers, local_mode=False):
             if date_col not in df_master.columns and "ngay" in df_master.columns:
                  df_master = df_master.rename(columns={"ngay": "date"})
             
-            df_master["date"] = pd.to_datetime(df_master["date"])
-            last_update_map = df_master.groupby("ticker")["date"].max().to_dict()
-            print(f"✅ Loaded {len(df_master)} rows.")
+            if "date" in df_master.columns:
+                df_master["date"] = pd.to_datetime(df_master["date"])
+                last_update_map = df_master.groupby("ticker")["date"].max().to_dict()
+                print(f"✅ Loaded {len(df_master)} rows.")
+            else:
+                print("⚠️ Master file missing date column. Starting fresh.")
+                df_master = pd.DataFrame()
         except Exception as e:
             print(f"⚠️ Master file corrupted: {e}. Starting fresh.")
             df_master = pd.DataFrame()
     else:
         print(f"✨ No existing file found. Creating new.")
 
-    # 2. Fetch New Data
-    print(f"🔄 Updating {len(tickers)} tickers for {data_type}...")
+    # 2. Parallel Fetch
+    print(f"🔄 Updating {len(tickers)} tickers for {data_type} (Workers: {max_workers})...")
     new_rows = []
-    today = datetime.now()
-    today_str = today.strftime("%d/%m/%Y")
     
-    for i, ticker in enumerate(tickers):
-        last_date = last_update_map.get(ticker)
-        if last_date:
-            start_dt = last_date + timedelta(days=1)
-            # Future protection
-            if start_dt > today: continue
-            start_str = start_dt.strftime("%d/%m/%Y")
-        else:
-            start_str = config["start_date_default"]
-            
-        # Only fetch if start <= today
-        if datetime.strptime(start_str, "%d/%m/%Y") <= today:
-            raw = fetch_cafef_range_data(config["url"], ticker, start_str, today_str, config.get("data_key_chain"))
-            if raw:
-                for row in raw:
-                    if isinstance(row, dict):
-                        # API usually returns "Symbol", which we rename to "ticker" later.
-                        # Only add explicit "ticker" if missing to avoid duplicates.
-                        if "Symbol" not in row and "symbol" not in row:
-                            row["ticker"] = ticker
-                        new_rows.append(row)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(process_ticker_range_data, t, config, last_update_map): t for t in tickers}
         
-        if (i + 1) % 50 == 0: print(f"   ⏳ Processed {i + 1}/{len(tickers)}...")
+        completed_count = 0
+        for future in as_completed(futures):
+            res = future.result()
+            if res:
+                new_rows.extend(res)
+            
+            completed_count += 1
+            if completed_count % 100 == 0:
+                print(f"   ⏳ Processed {completed_count}/{len(tickers)}...")
 
     # 3. Merge & Save
     if not new_rows:
@@ -340,7 +370,7 @@ def update_range_dataset(data_type, tickers, local_mode=False):
         print(f"☁️ Uploaded to R2: {master_key}")
         if os.path.exists(local_master_path): os.remove(local_master_path)
 
-def update_tick_data(tickers, target_date_obj, local_mode=False):
+def update_tick_data(tickers, target_date_obj, local_mode=False, max_workers=10):
     config = CONFIG["tick_data"]
     bucket = os.getenv("R2_BUCKET")
     
@@ -359,15 +389,21 @@ def update_tick_data(tickers, target_date_obj, local_mode=False):
         print(f"✅ Tick data for {ddmmyy} already exists.")
         return
 
-    print(f"⚡ Fetching TICK DATA for {target_date_obj.strftime('%Y-%m-%d')}...")
+    print(f"⚡ Fetching TICK DATA for {target_date_obj.strftime('%Y-%m-%d')} (Workers: {max_workers})...")
     all_ticks = []
     
-    for i, ticker in enumerate(tickers):
-        ticks = fetch_tick_data(config["url"], ticker, target_date_obj)
-        if ticks: all_ticks.extend(ticks)
-        if (i + 1) % 100 == 0: 
-            print(f"   ⏱️ Processed {i+1}/{len(tickers)} ({len(all_ticks)} ticks)")
-            time.sleep(0.5)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(fetch_tick_data, config["url"], t, target_date_obj): t for t in tickers}
+        
+        completed_count = 0
+        for future in as_completed(futures):
+            res = future.result()
+            if res:
+                all_ticks.extend(res)
+            
+            completed_count += 1
+            if completed_count % 200 == 0:
+                print(f"   ⏱️ Processed {completed_count}/{len(tickers)} (Ticks: {len(all_ticks)})")
 
     if not all_ticks:
         print(f"🔸 No tick data found for {ddmmyy}.")
@@ -397,6 +433,7 @@ def run():
     parser.add_argument("--start-year", type=int, default=2023, help="Start year for Range Data")
     parser.add_argument("--tick-start-date", type=str, default=None, help="YYYY-MM-DD start for Tick Backfill")
     parser.add_argument("--local", action="store_true", help="Run local only (Save to disk, skip R2)")
+    parser.add_argument("--workers", type=int, default=10, help="Number of parallel workers (default 10)")
     
     args = parser.parse_args()
 
@@ -406,7 +443,7 @@ def run():
         CONFIG[key]["start_date_default"] = start_date_str
     
     if args.local:
-        print("🏠 RUNNING IN LOCAL MODE")
+        print(f"🏠 RUNNING IN LOCAL MODE (Workers: {args.workers})")
 
     # 1. Get Tickers
     tickers = get_tickers_from_latest_stock_price(local_mode=args.local)
@@ -417,9 +454,9 @@ def run():
 
     # 2. Update Range Data
     print("\n=== UPDATING RANGE DATASETS ===")
-    update_range_dataset("proprietary", tickers, local_mode=args.local)
-    update_range_dataset("insider", tickers, local_mode=args.local)
-    update_range_dataset("order_stats", tickers, local_mode=args.local)
+    update_range_dataset("proprietary", tickers, local_mode=args.local, max_workers=args.workers)
+    update_range_dataset("insider", tickers, local_mode=args.local, max_workers=args.workers)
+    update_range_dataset("order_stats", tickers, local_mode=args.local, max_workers=args.workers)
 
     # 3. Update Tick Data
     print("\n=== UPDATING TICK DATA ===")
@@ -435,7 +472,7 @@ def run():
                 target_date = start_dt + timedelta(days=i)
                 if target_date.weekday() < 5:
                     print(f"\nProcessing Date: {target_date.strftime('%Y-%m-%d')}")
-                    update_tick_data(tickers, target_date, local_mode=args.local)
+                    update_tick_data(tickers, target_date, local_mode=args.local, max_workers=args.workers)
                 else:
                     print(f"Skipping weekend: {target_date.strftime('%Y-%m-%d')}")
         except ValueError:
@@ -445,7 +482,7 @@ def run():
         # Today
         today = datetime.now()
         if today.weekday() < 5:
-            update_tick_data(tickers, today, local_mode=args.local)
+            update_tick_data(tickers, today, local_mode=args.local, max_workers=args.workers)
         
         # Short backfill
         if args.tick_backfill_days > 0:
@@ -455,7 +492,7 @@ def run():
                 past_date_str = past_date.strftime("%d/%m/%Y")
                 # Need to manually call update_tick_data
                 if past_date.weekday() < 5:
-                    update_tick_data(tickers, past_date, local_mode=args.local)
+                    update_tick_data(tickers, past_date, local_mode=args.local, max_workers=args.workers)
 
 if __name__ == "__main__":
     run()
