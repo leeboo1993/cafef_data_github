@@ -295,7 +295,10 @@ def update_range_dataset(data_type, tickers, local_mode=False):
             if raw:
                 for row in raw:
                     if isinstance(row, dict):
-                        row["ticker"] = ticker
+                        # API usually returns "Symbol", which we rename to "ticker" later.
+                        # Only add explicit "ticker" if missing to avoid duplicates.
+                        if "Symbol" not in row and "symbol" not in row:
+                            row["ticker"] = ticker
                         new_rows.append(row)
         
         if (i + 1) % 50 == 0: print(f"   ⏳ Processed {i + 1}/{len(tickers)}...")
