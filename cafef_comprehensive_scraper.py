@@ -75,11 +75,16 @@ CONFIG = {
         "start_date_default": "01/01/2023",
          "data_key_chain": ["Data", "Data"],
     },
-    # 4. Tick Data (Khop lenh tung lenh -5)
+    # 4. Tick Data / Price Distribution
     "tick_data": {
         "url": "https://msh-appdata.cafef.vn/rest-api/api/v1/MatchPrice",
         "r2_folder": "cafef_data/tick_data/",
         "file_pattern": "cafef_tick_data_{ddmmyy}.parquet",
+    },
+    "price_distribution": {
+        "url": "https://msh-appdata.cafef.vn/rest-api/api/v1/MatchPrice", # Same Endpoint
+        "r2_folder": "cafef_data/price_distribution/",
+        "file_pattern": "cafef_price_distribution_{ddmmyy}.parquet",
     }
 }
 
@@ -111,6 +116,66 @@ def find_latest_master_file(folder, prefix, local_mode=False, bucket=None):
     # Should sort correctly alphabetically if YYYYMMDD is used.
     candidates.sort() 
     return candidates[-1]
+
+def fetch_tick_data_raw(url, symbol, date_obj):
+    """Fetch raw JSON from MatchPrice endpoint."""
+    try:
+        date_str = date_obj.strftime("%Y%m%d")
+        params = {"symbol": symbol, "date": date_str}
+        r = requests.get(url, params=params, headers=HEADERS, timeout=15)
+        
+        if r.status_code != 200: return None
+        return r.json()
+    except Exception as e:
+        return None
+
+# ... (Previous Helper Functions)
+
+def parse_asp_date(x):
+    """Parse ASP.NET JSON Date format: /Date(1744909200000)/"""
+    if pd.isna(x) or not isinstance(x, str):
+        return x
+    
+    # Check for /Date(123123123)/ format
+    m = re.search(r"/Date\((\d+)\)/", x)
+    if m:
+        try:
+            ts = int(m.group(1)) / 1000
+            return datetime.fromtimestamp(ts)
+        except:
+            return pd.NaT
+            
+    return x
+
+def clean_dataframe_dates(df):
+    """Clean all date-like columns in the dataframe."""
+    # Columns that definitely contain dates based on Observation
+    date_keywords = ["date", "ngay", "time", "day"]
+    
+    for col in df.columns:
+        lower_col = col.lower()
+        if any(k in lower_col for k in date_keywords):
+            # Try to clean
+            # First, if it's object type, try ASP parsing
+            if df[col].dtype == object:
+                # check first non-null
+                first_valid = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
+                if isinstance(first_valid, str) and "/Date(" in first_valid:
+                    print(f"   🔧 Parsing ASP.NET dates in column: {col}")
+                    df[col] = df[col].apply(parse_asp_date)
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                
+                # If it looks like '26.4 ( -0.75 %)', it's not a date, but 'date' might be key.
+                # Actually, standard string dates might technically be there too.
+                # Let's rely on pd.to_datetime for standard formats if not ASP
+                elif "date" in lower_col or "ngay" in lower_col:
+                     df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
+
+    return df
+
+# ... (Previous API Fetchers)
+
+# ... (Previous Worker Functions)
 
 def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
     config = CONFIG[data_type]
@@ -187,6 +252,9 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
     if "ngay" in df_new.columns: df_new = df_new.rename(columns={"ngay": "date"})
     if "date" in df_new.columns: df_new["date"] = pd.to_datetime(df_new["date"], dayfirst=True, errors='coerce')
     
+    # CLEAN ASP DATES HERE
+    df_new = clean_dataframe_dates(df_new)
+
     rename_map = {"symbol": "ticker", "giatrirong": "net_value", "khoiluongrong": "net_volume", "nguoithuchien": "executor"}
     df_new = df_new.rename(columns=rename_map)
 
@@ -201,7 +269,10 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
     # Determine new filename with latest date coverage
     max_date = datetime.now()
     if "date" in df_final.columns and not df_final.empty:
-        max_date = df_final["date"].max()
+        # Check if Nat
+        valid_dates = df_final["date"].dropna()
+        if not valid_dates.empty:
+            max_date = valid_dates.max()
         
     new_filename = f"{prefix}_upto_{max_date.strftime('%Y%m%d')}.parquet"
     
@@ -226,24 +297,21 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
         
         # Cleanup old R2 file
         if latest_file_path and latest_file_path != r2_key:
-             # Need to implement delete in utils_r2 or use boto3 directly here if utils unavailable
-             # For now, let's assume we keep backups or the user can clean up. 
-             # But to keep it clean, we should delete.
-             # Note: list_r2_files returns keys, so latest_file_path is a key.
-             # We need a delete_from_r2 function. Check imports.
              pass 
 
 # ... (update_tick_data and run functions remain same) ...
 
-def update_tick_data(tickers, target_date_obj, local_mode=False, max_workers=10):
-    config = CONFIG["tick_data"]
+def update_tick_data(tickers, target_date_obj, local_mode=False, max_workers=10, summary_only=False):
+    # Select mode
+    mode_key = "price_distribution" if summary_only else "tick_data"
+    config = CONFIG[mode_key]
     bucket = os.getenv("R2_BUCKET")
     
     date_str = target_date_obj.strftime('%Y-%m-%d')
     ddmmyy = target_date_obj.strftime("%d%m%y")
     filename = config["file_pattern"].format(ddmmyy=ddmmyy)
     r2_key = f"{config['r2_folder']}{filename}"
-    local_path = f"cafef_data/tick_data/{filename}" if local_mode else f"temp_{filename}"
+    local_path = f"cafef_data/{mode_key}/{filename}" if local_mode else f"temp_{filename}"
     
     should_skip = False
     if local_mode:
@@ -252,32 +320,60 @@ def update_tick_data(tickers, target_date_obj, local_mode=False, max_workers=10)
         if list_r2_files(bucket, r2_key): should_skip = True
 
     if should_skip:
-        print(f"[{date_str}] ✅ Tick data already exists.")
+        print(f"[{date_str}] ✅ {mode_key} already exists.")
         return
 
-    print(f"[{date_str}] ⚡ Fetching TICK DATA (Workers: {max_workers})...")
-    all_ticks = []
+    print(f"[{date_str}] ⚡ Fetching {mode_key.upper()} (Workers: {max_workers})...")
+    all_rows = []
     
+    def process_one(ticker):
+        raw = fetch_tick_data_raw(config["url"], ticker, target_date_obj)
+        if not raw: return []
+        
+        if summary_only:
+            # Extract Aggregates
+            # Keys: price, totalVolume, volPercent
+            rows = raw.get("aggregates", [])
+        else:
+            # Extract Ticks
+            # Keys: id, time, price, volume, etc.
+            rows = raw.get("data", [])
+            
+        for r in rows:
+            r["ticker"] = ticker
+            r["date"] = date_str
+        return rows
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(fetch_tick_data, config["url"], t, target_date_obj): t for t in tickers}
+        futures = {executor.submit(process_one, t): t for t in tickers}
         
         completed_count = 0
         for future in as_completed(futures):
             res = future.result()
             if res:
-                all_ticks.extend(res)
+                all_rows.extend(res)
             
             completed_count += 1
             if completed_count % 500 == 0:
                 print(f"   [{date_str}] ⏱️ Processed {completed_count}/{len(tickers)}...")
 
-    if not all_ticks:
-        print(f"[{date_str}] 🔸 No tick data found.")
+    if not all_rows:
+        print(f"[{date_str}] 🔸 No data found.")
         return
 
-    print(f"[{date_str}] 📦 Saving {len(all_ticks)} ticks...")
-    df = pd.DataFrame(all_ticks)
+    print(f"[{date_str}] 📦 Saving {len(all_rows)} records...")
+    df = pd.DataFrame(all_rows)
     
+    # Standardize columns for distribution
+    if summary_only:
+        # cafeF returns: price, totalVolume, volPercent
+        # let's rename to something nice
+        rename_map = {
+            "totalVolume": "volume",
+            "volPercent": "percentage"
+        }
+        df = df.rename(columns=rename_map)
+
     if local_mode:
         ensure_folder_exists_local(os.path.dirname(local_path))
         df.to_parquet(local_path, index=False)
@@ -301,6 +397,7 @@ def run():
     parser.add_argument("--local", action="store_true", help="Run local only (Save to disk, skip R2)")
     parser.add_argument("--workers", type=int, default=10, help="Number of parallel workers per task")
     parser.add_argument("--parallel-days", type=int, default=1, help="Number of tick-data days to run in parallel")
+    parser.add_argument("--summary-only", action="store_true", help="Download Price Distribution SUMMARY instead of full ticks")
     
     args = parser.parse_args()
 
@@ -311,6 +408,10 @@ def run():
     
     if args.local:
         print(f"🏠 RUNNING IN LOCAL MODE (Workers/Task: {args.workers}, Parallel Days: {args.parallel_days})")
+        if args.summary_only:
+            print("📊 MODE: PRICE DISTRIBUTION SUMMARY (Lightweight)")
+        else:
+            print("📈 MODE: FULL TICK DATA (Heavy)")
 
     # 1. Get Tickers
     tickers = get_tickers_from_latest_stock_price(local_mode=args.local)
@@ -331,8 +432,9 @@ def run():
             # Just wait for completion, exceptions are printed inside
             pass
 
-    # 3. Update Tick Data
-    print("\n=== UPDATING TICK DATA ===")
+    # 3. Update Tick Data OR Summary Data
+    label = "PRICE DISTRIBUTION" if args.summary_only else "TICK DATA"
+    print(f"\n=== UPDATING {label} ===")
     
     dates_to_process = []
     
@@ -366,14 +468,14 @@ def run():
                     dates_to_process.append(past_date)
 
     if not dates_to_process:
-        print("✅ No tick dates to process.")
+        print("✅ No dates to process.")
         return
 
     print(f"📅 Processing {len(dates_to_process)} days (Parallel Days: {args.parallel_days})...")
     
     with ThreadPoolExecutor(max_workers=args.parallel_days) as day_executor:
         day_futures = [
-            day_executor.submit(update_tick_data, tickers, dt, args.local, args.workers) 
+            day_executor.submit(update_tick_data, tickers, dt, args.local, args.workers, args.summary_only) 
             for dt in dates_to_process
         ]
         for f in as_completed(day_futures):
