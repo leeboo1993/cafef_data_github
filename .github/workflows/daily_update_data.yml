@@ -150,9 +150,9 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
-          echo "🚀 Running Comprehensive Scraper..."
-          # Run with a 3-day lookback for tick data to catch missed days
-          python cafef_comprehensive_scraper.py --tick-backfill-days 3
+          echo "🚀 Running Comprehensive Scraper (T-5 Business Days)..."
+          # Run with a 5 business day lookback to ensure gapless data
+          python cafef_comprehensive_scraper.py --lookback-days 5 --workers 20
 
       # --------------------------------------------------------
       # 1️⃣2️⃣ Commit and push changes

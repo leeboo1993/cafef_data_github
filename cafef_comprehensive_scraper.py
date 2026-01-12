@@ -74,24 +74,76 @@ CONFIG = {
         "file_prefix": "all_order_statistics",
         "start_date_default": "01/01/2023",
          "data_key_chain": ["Data", "Data"],
-    },
-    # 4. Tick Data / Price Distribution
-    "tick_data": {
-        "url": "https://msh-appdata.cafef.vn/rest-api/api/v1/MatchPrice",
-        "r2_folder": "cafef_data/tick_data/",
-        "file_pattern": "cafef_tick_data_{ddmmyy}.parquet",
-    },
-    "price_distribution": {
-        "url": "https://msh-appdata.cafef.vn/rest-api/api/v1/MatchPrice", # Same Endpoint
-        "r2_folder": "cafef_data/price_distribution/",
-        "file_pattern": "cafef_price_distribution_{ddmmyy}.parquet",
     }
 }
 
-# ... (Helper Functions remain same) ...
+# =====================================================
+# 3️⃣ HELPER FUNCTIONS
+# =====================================================
+
+def ensure_folder_exists_local(folder):
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+def get_tickers_from_latest_stock_price(local_mode=False):
+    """Download tickers from R2 or look for local files."""
+    bucket = os.getenv("R2_BUCKET")
+    
+    # 1. Local Mode Strategy
+    if local_mode or not bucket:
+        print("🕵️ Local Mode: Searching for stock price files in 'cafef_data/'...")
+        local_dir = "cafef_data/"
+        candidates = []
+        if os.path.exists(local_dir):
+            for root, dirs, files in os.walk(local_dir):
+                for f in files:
+                    if f.startswith("cafef_stock_price_") and f.endswith(".parquet"):
+                        candidates.append(os.path.join(root, f))
+        
+        if candidates:
+            # Use most recent file
+            latest_file = max(candidates, key=lambda x: os.path.getmtime(x))
+            print(f"📋 Using local ticker list from: {latest_file}")
+            try:
+                df = pd.read_parquet(latest_file, columns=["ticker"])
+                tickers = df["ticker"].dropna().astype(str).unique().tolist()
+                print(f"✅ Found {len(tickers)} unique tickers.")
+                return sorted(tickers)
+            except Exception as e:
+                print(f"⚠️ Error reading local tickers: {e}")
+        
+        print("⚠️ No local ticker file found. Using Top 30 Fallback.")
+        return ["ACB", "BCM", "BID", "BVH", "CTG", "FPT", "GAS", "GVR", "HDB", "HPG", 
+                "MBB", "MSN", "MWG", "PLX", "POW", "SAB", "SHB", "SSB", "SSI", "STB", 
+                "TCB", "TPB", "VCB", "VHM", "VIB", "VIC", "VJC", "VNM", "VPB", "VRE"]
+
+    # 2. R2 Mode Strategy
+    files = list_r2_files(bucket, "cafef_data/cafef_stock_price_")
+    files = [f for f in files if f.endswith(".parquet")]
+    if not files:
+        print("❌ No stock price data found in R2.")
+        return []
+    
+    def parse_date(f):
+        m = re.search(r"(\d{6})\.parquet", f)
+        if m: return datetime.strptime(m.group(1), "%d%m%y")
+        return datetime.min
+        
+    latest_file = max(files, key=parse_date)
+    local_path = "temp_tickers.parquet"
+    if download_from_r2(bucket, latest_file, local_path):
+        try:
+            df = pd.read_parquet(local_path, columns=["ticker"])
+            tickers = df["ticker"].dropna().astype(str).unique().tolist()
+            os.remove(local_path)
+            return sorted(tickers)
+        except Exception as e:
+            if os.path.exists(local_path): os.remove(local_path)
+            return []
+    return []
 
 def find_latest_master_file(folder, prefix, local_mode=False, bucket=None):
-    """Find the latest master file pattern: prefix_upto_YYYYMMDD.parquet"""
+    """Find the latest master file pattern: prefix_DDMMYY.parquet"""
     candidates = []
     
     if local_mode:
@@ -102,34 +154,30 @@ def find_latest_master_file(folder, prefix, local_mode=False, bucket=None):
     else:
         files = list_r2_files(bucket, folder)
         for f in files:
-            # R2 keys include folder path
             fname = os.path.basename(f)
             if fname.startswith(prefix) and fname.endswith(".parquet"):
-                candidates.append(f) # f is full key
+                candidates.append(f)
                 
     if not candidates:
+        # Fallback for Legacy Files (e.g. all_proprietary_trading.parquet without date)
+        if local_mode:
+            legacy_file = os.path.join(folder, f"{prefix}.parquet")
+            if os.path.exists(legacy_file):
+                return legacy_file
+                
         return None
         
-    # Sort by name (which includes date if formatted YYYYMMDD) or just modification time
-    # Actually, we should try to parse the date from filename if possible, or fallback to simple sort
-    # Filename format expected: all_xyz_upto_20250101.parquet
-    # Should sort correctly alphabetically if YYYYMMDD is used.
-    candidates.sort() 
-    return candidates[-1]
+    def parse_filename_date(f):
+        # Expecting prefix_DDMMYY.parquet
+        m = re.search(r"_(\d{6})\.parquet$", f)
+        if m:
+            try:
+                return datetime.strptime(m.group(1), "%d%m%y")
+            except: pass
+        return datetime.min
 
-def fetch_tick_data_raw(url, symbol, date_obj):
-    """Fetch raw JSON from MatchPrice endpoint."""
-    try:
-        date_str = date_obj.strftime("%Y%m%d")
-        params = {"symbol": symbol, "date": date_str}
-        r = requests.get(url, params=params, headers=HEADERS, timeout=15)
-        
-        if r.status_code != 200: return None
-        return r.json()
-    except Exception as e:
-        return None
-
-# ... (Previous Helper Functions)
+    latest = max(candidates, key=parse_filename_date)
+    return latest
 
 def parse_asp_date(x):
     """Parse ASP.NET JSON Date format: /Date(1744909200000)/"""
@@ -149,14 +197,10 @@ def parse_asp_date(x):
 
 def clean_dataframe_dates(df):
     """Clean all date-like columns in the dataframe."""
-    # Columns that definitely contain dates based on Observation
     date_keywords = ["date", "ngay", "time", "day"]
-    
     for col in df.columns:
         lower_col = col.lower()
         if any(k in lower_col for k in date_keywords):
-            # Try to clean
-            # First, if it's object type, try ASP parsing
             if df[col].dtype == object:
                 # check first non-null
                 first_valid = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
@@ -164,18 +208,51 @@ def clean_dataframe_dates(df):
                     print(f"   🔧 Parsing ASP.NET dates in column: {col}")
                     df[col] = df[col].apply(parse_asp_date)
                     df[col] = pd.to_datetime(df[col], errors='coerce')
-                
-                # If it looks like '26.4 ( -0.75 %)', it's not a date, but 'date' might be key.
-                # Actually, standard string dates might technically be there too.
-                # Let's rely on pd.to_datetime for standard formats if not ASP
                 elif "date" in lower_col or "ngay" in lower_col:
                      df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
-
     return df
 
-# ... (Previous API Fetchers)
-
-# ... (Previous Worker Functions)
+def process_ticker_range_data(ticker, config, last_update_map):
+    """Fetch range data for a single ticker."""
+    url = config["url"]
+    start_date = config["start_date_default"]
+    
+    # Check last update
+    if ticker in last_update_map:
+        last_date = last_update_map[ticker]
+        start_date = (last_date + timedelta(days=1)).strftime("%d/%m/%Y")
+        
+    params = {
+        "Symbol": ticker,
+        "StartDate": start_date,
+        "EndDate": datetime.now().strftime("%d/%m/%Y"),
+        "PageIndex": 1,
+        "PageSize": 10000  # Fetch large batch
+    }
+    
+    try:
+        r = requests.get(url, params=params, headers=HEADERS, timeout=30)
+        if r.status_code != 200: return []
+        
+        data = r.json()
+        
+        # Traverse key chain
+        cursor = data
+        for k in config["data_key_chain"]:
+            if isinstance(cursor, dict) and k in cursor:
+                cursor = cursor[k]
+            elif isinstance(cursor, list): 
+                pass
+            else:
+                return []
+                
+        if isinstance(cursor, list):
+            for row in cursor:
+                row["symbol"] = ticker
+            return cursor
+        return []
+    except:
+        return []
 
 def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
     config = CONFIG[data_type]
@@ -183,7 +260,10 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
     folder = config["r2_folder"]
     prefix = config["file_prefix"]
     
-    # Local folder handling
+    # Temp folder for chunks
+    temp_chunk_dir = f"cafef_data/temp_chunks/{data_type}"
+    ensure_folder_exists_local(temp_chunk_dir)
+    
     if local_mode:
         ensure_folder_exists_local(folder)
         
@@ -194,7 +274,7 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
     latest_file_path = find_latest_master_file(folder, prefix, local_mode, bucket)
     
     if latest_file_path:
-        print(f"📥 Loading existing master: {latest_file_path}")
+        print(f"📥 Loading master: {latest_file_path}")
         local_load_path = latest_file_path
         
         if not local_mode:
@@ -203,187 +283,152 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
             
         try:
             df_master = pd.read_parquet(local_load_path)
-            
-            # Normalize date col
             if "ngay" in df_master.columns: df_master = df_master.rename(columns={"ngay": "date"})
             if "date" in df_master.columns:
                 df_master["date"] = pd.to_datetime(df_master["date"])
                 last_update_map = df_master.groupby("ticker")["date"].max().to_dict()
-                print(f"✅ Loaded history: {len(df_master)} rows (Latest date: {df_master['date'].max().strftime('%Y-%m-%d')})")
+                print(f"✅ Loaded history: {len(df_master)} rows (Latest: {df_master['date'].max().strftime('%Y-%m-%d')})")
             else:
-                print("⚠️ Master file missing date column. Starting fresh.")
                 df_master = pd.DataFrame()
-        except Exception as e:
-            print(f"⚠️ Corrupted master file: {e}. Starting fresh.")
+        except:
             df_master = pd.DataFrame()
             
-        # Cleanup temp download
         if not local_mode and os.path.exists(local_load_path):
             os.remove(local_load_path)
     else:
         print(f"✨ No history found. Starting fresh.")
 
-    # 2. Parallel Fetch
-    print(f"🔄 Updating {len(tickers)} tickers for {data_type} (Workers: {max_workers})...")
-    new_rows = []
+    # 2. Check for Existing Chunks (Resume Capability)
+    processed_tickers = set()
+    existing_chunks = [os.path.join(temp_chunk_dir, f) for f in os.listdir(temp_chunk_dir) if f.endswith(".parquet")]
     
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(process_ticker_range_data, t, config, last_update_map): t for t in tickers}
-        
-        completed_count = 0
-        for future in as_completed(futures):
-            res = future.result()
-            if res:
-                new_rows.extend(res)
-            
-            completed_count += 1
-            if completed_count % 100 == 0:
-                print(f"   ⏳ Processed {completed_count}/{len(tickers)}...")
+    if existing_chunks:
+        print(f"🔄 Found {len(existing_chunks)} partial chunks. Resuming...")
+        for chunk in existing_chunks:
+            try:
+                # We interpret "processed" as tickers present in these chunks
+                # Optimally we would just read the 'ticker' column unique values
+                df_chunk = pd.read_parquet(chunk, columns=["ticker"])
+                chunk_tickers = df_chunk["ticker"].unique()
+                processed_tickers.update(chunk_tickers)
+            except:
+                pass
+        print(f"⏩ Skipping {len(processed_tickers)} already processed tickers.")
 
-    # 3. Merge & Save
-    if not new_rows:
-        print("✅ No new data found. Master file remains unchanged.")
+    # Filter out processed tickers
+    tickers_to_process = [t for t in tickers if t not in processed_tickers]
+    
+    if not tickers_to_process:
+        print("✅ All tickers already processed in chunks. Proceeding to merge.")
+    else:
+        # 3. Batch Processing
+        batch_size = 500
+        total_batches = (len(tickers_to_process) // batch_size) + 1
+        
+        print(f"🔄 Updating {len(tickers_to_process)} tickers for {data_type} (Workers: {max_workers})...")
+        print(f"📦 Batch Processing: {total_batches} batches of ~{batch_size} tickers.")
+
+        for batch_idx in range(total_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = start_idx + batch_size
+            batch_tickers = tickers_to_process[start_idx:end_idx]
+            
+            if not batch_tickers: continue
+            
+            print(f"   [{data_type}] 🚀 Batch {batch_idx + 1}/{total_batches} ({len(batch_tickers)} tickers)...")
+            
+            new_rows = []
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(process_ticker_range_data, t, config, last_update_map): t for t in batch_tickers}
+                
+                for future in as_completed(futures):
+                    res = future.result()
+                    if res:
+                        new_rows.extend(res)
+
+            # Save Batch
+            if new_rows:
+                df_batch = pd.DataFrame(new_rows)
+                df_batch.columns = [c.lower() for c in df_batch.columns]
+                
+                # Deduplicate columns (e.g. Symbol vs symbol)
+                df_batch = df_batch.loc[:, ~df_batch.columns.duplicated()]
+                
+                # Pre-clean batch
+                if "ngay" in df_batch.columns: df_batch = df_batch.rename(columns={"ngay": "date"})
+                if "date" in df_batch.columns: df_batch["date"] = pd.to_datetime(df_batch["date"], dayfirst=True, errors='coerce')
+                df_batch = clean_dataframe_dates(df_batch)
+                
+                rename_map = {"symbol": "ticker", "giatrirong": "net_value", "khoiluongrong": "net_volume", "nguoithuchien": "executor"}
+                df_batch = df_batch.rename(columns=rename_map)
+
+                batch_file = os.path.join(temp_chunk_dir, f"batch_{batch_idx}_{int(time.time())}.parquet")
+                df_batch.to_parquet(batch_file, index=False)
+                print(f"      💾 Saved batch: {len(df_batch)} records")
+            else:
+                print("      ⚠️ No data in this batch.")
+
+    # 4. Final Merge (Master + All Chunks)
+    print(f"🔗 Merging master and chunks for {data_type}...")
+    all_chunks = [os.path.join(temp_chunk_dir, f) for f in os.listdir(temp_chunk_dir) if f.endswith(".parquet")]
+    
+    if not all_chunks and df_master.empty:
+        print("⚠️ No data available to save.")
         return
 
-    print(f"📊 New records found: {len(new_rows)}")
-    df_new = pd.DataFrame(new_rows)
-    df_new.columns = [c.lower() for c in df_new.columns]
+    dfs_to_concat = [df_master] if not df_master.empty else []
     
-    if "ngay" in df_new.columns: df_new = df_new.rename(columns={"ngay": "date"})
-    if "date" in df_new.columns: df_new["date"] = pd.to_datetime(df_new["date"], dayfirst=True, errors='coerce')
-    
-    # CLEAN ASP DATES HERE
-    df_new = clean_dataframe_dates(df_new)
-
-    rename_map = {"symbol": "ticker", "giatrirong": "net_value", "khoiluongrong": "net_volume", "nguoithuchien": "executor"}
-    df_new = df_new.rename(columns=rename_map)
-
-    if df_master.empty:
-        df_final = df_new
-    else:
-        df_final = pd.concat([df_master, df_new], ignore_index=True)
+    for chunk in all_chunks:
+        try:
+            dfs_to_concat.append(pd.read_parquet(chunk))
+        except Exception as e:
+            print(f"⚠️ Failed to read chunk {chunk}: {e}")
+            
+    if not dfs_to_concat:
+        print("⚠️ No valid data frames to merge.")
+        return
         
+    df_final = pd.concat(dfs_to_concat, ignore_index=True)
+    
+    # Ensure final date column is datetime
+    if "date" in df_final.columns:
+        df_final["date"] = pd.to_datetime(df_final["date"], errors='coerce')
+    
+    # 5. Final Cleanup
     if "date" in df_final.columns and "ticker" in df_final.columns:
         df_final = df_final.drop_duplicates()
-        
-    # Determine new filename with latest date coverage
+    
+    # Determine new filename
     max_date = datetime.now()
-    if "date" in df_final.columns and not df_final.empty:
-        # Check if Nat
-        valid_dates = df_final["date"].dropna()
-        if not valid_dates.empty:
-            max_date = valid_dates.max()
+    if "date" in df_final.columns and not df_final.dropna(subset=["date"]).empty:
+        max_date = df_final["date"].max()
         
-    new_filename = f"{prefix}_upto_{max_date.strftime('%Y%m%d')}.parquet"
+    new_filename = f"{prefix}_{max_date.strftime('%d%m%y')}.parquet"
     
     if local_mode:
         new_path = os.path.join(folder, new_filename)
         df_final.to_parquet(new_path, index=False)
         print(f"💾 Updated master saved: {new_path}")
         
-        # Cleanup old local file if name changed
+        # Cleanup old local file
         if latest_file_path and latest_file_path != new_path:
             try:
                 os.remove(latest_file_path)
-                print(f"🗑️ Removed old master: {latest_file_path}")
+                print(f"🗑️ Removed old: {os.path.basename(latest_file_path)}")
             except: pass
     else:
         temp_path = f"temp_{new_filename}"
         r2_key = f"{folder}{new_filename}"
         df_final.to_parquet(temp_path, index=False)
         upload_to_r2(temp_path, bucket, r2_key)
-        print(f"☁️ Uploaded new master: {r2_key}")
+        print(f"☁️ Uploaded: {r2_key}")
         os.remove(temp_path)
         
-        # Cleanup old R2 file
-        if latest_file_path and latest_file_path != r2_key:
-             pass 
-
-# ... (update_tick_data and run functions remain same) ...
-
-def update_tick_data(tickers, target_date_obj, local_mode=False, max_workers=10, summary_only=False):
-    # Select mode
-    mode_key = "price_distribution" if summary_only else "tick_data"
-    config = CONFIG[mode_key]
-    bucket = os.getenv("R2_BUCKET")
-    
-    date_str = target_date_obj.strftime('%Y-%m-%d')
-    ddmmyy = target_date_obj.strftime("%d%m%y")
-    filename = config["file_pattern"].format(ddmmyy=ddmmyy)
-    r2_key = f"{config['r2_folder']}{filename}"
-    local_path = f"cafef_data/{mode_key}/{filename}" if local_mode else f"temp_{filename}"
-    
-    should_skip = False
-    if local_mode:
-        if os.path.exists(local_path): should_skip = True
-    else:
-        if list_r2_files(bucket, r2_key): should_skip = True
-
-    if should_skip:
-        print(f"[{date_str}] ✅ {mode_key} already exists.")
-        return
-
-    print(f"[{date_str}] ⚡ Fetching {mode_key.upper()} (Workers: {max_workers})...")
-    all_rows = []
-    
-    def process_one(ticker):
-        raw = fetch_tick_data_raw(config["url"], ticker, target_date_obj)
-        if not raw: return []
-        
-        if summary_only:
-            # Extract Aggregates
-            # Keys: price, totalVolume, volPercent
-            rows = raw.get("aggregates", [])
-        else:
-            # Extract Ticks
-            # Keys: id, time, price, volume, etc.
-            rows = raw.get("data", [])
-            
-        for r in rows:
-            r["ticker"] = ticker
-            r["date"] = date_str
-        return rows
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(process_one, t): t for t in tickers}
-        
-        completed_count = 0
-        for future in as_completed(futures):
-            res = future.result()
-            if res:
-                all_rows.extend(res)
-            
-            completed_count += 1
-            if completed_count % 500 == 0:
-                print(f"   [{date_str}] ⏱️ Processed {completed_count}/{len(tickers)}...")
-
-    if not all_rows:
-        print(f"[{date_str}] 🔸 No data found.")
-        return
-
-    print(f"[{date_str}] 📦 Saving {len(all_rows)} records...")
-    df = pd.DataFrame(all_rows)
-    
-    # Standardize columns for distribution
-    if summary_only:
-        # cafeF returns: price, totalVolume, volPercent
-        # let's rename to something nice
-        rename_map = {
-            "totalVolume": "volume",
-            "volPercent": "percentage"
-        }
-        df = df.rename(columns=rename_map)
-
-    if local_mode:
-        ensure_folder_exists_local(os.path.dirname(local_path))
-        df.to_parquet(local_path, index=False)
-        print(f"[{date_str}] 💾 Saved locally: {local_path}")
-    else:
-        ensure_folder_exists(bucket, config["r2_folder"])
-        df.to_parquet(local_path, index=False)
-        upload_to_r2(local_path, bucket, r2_key)
-        os.remove(local_path)
-        print(f"[{date_str}] ☁️ Uploaded: {r2_key}")
+    # 6. Cleanup Chunks
+    print("🧹 Cleaning up temporary chunks...")
+    import shutil
+    shutil.rmtree(temp_chunk_dir)
+    print("✨ Cleanup done.")
 
 # =====================================================
 # 4️⃣ RUNNER
@@ -391,27 +436,33 @@ def update_tick_data(tickers, target_date_obj, local_mode=False, max_workers=10,
 def run():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, default="daily", help="daily or backfill")
-    parser.add_argument("--tick-backfill-days", type=int, default=0, help="Days back to check for tick data")
     parser.add_argument("--start-year", type=int, default=2023, help="Start year for Range Data")
-    parser.add_argument("--tick-start-date", type=str, default=None, help="YYYY-MM-DD start for Tick Backfill")
     parser.add_argument("--local", action="store_true", help="Run local only (Save to disk, skip R2)")
     parser.add_argument("--workers", type=int, default=10, help="Number of parallel workers per task")
-    parser.add_argument("--parallel-days", type=int, default=1, help="Number of tick-data days to run in parallel")
-    parser.add_argument("--summary-only", action="store_true", help="Download Price Distribution SUMMARY instead of full ticks")
+    parser.add_argument("--lookback-days", type=int, default=0, help="Number of business days to look back (overrides start-year)")
     
     args = parser.parse_args()
 
     # Update configs
-    start_date_str = f"01/01/{args.start_year}"
+    if args.lookback_days > 0:
+        # Calculate start date: T - N business days
+        date = datetime.now()
+        count = 0
+        while count < args.lookback_days:
+            date -= timedelta(days=1)
+            if date.weekday() < 5: # Mon-Fri are 0-4
+                count += 1
+        start_date_str = date.strftime("%d/%m/%Y")
+        print(f"📅 Scrape Window: T-{args.lookback_days} Business Days -> Start Date: {start_date_str}")
+    else:
+        start_date_str = f"01/01/{args.start_year}"
+
     for key in ["proprietary", "insider", "order_stats"]:
         CONFIG[key]["start_date_default"] = start_date_str
     
     if args.local:
-        print(f"🏠 RUNNING IN LOCAL MODE (Workers/Task: {args.workers}, Parallel Days: {args.parallel_days})")
-        if args.summary_only:
-            print("📊 MODE: PRICE DISTRIBUTION SUMMARY (Lightweight)")
-        else:
-            print("📈 MODE: FULL TICK DATA (Heavy)")
+        print(f"🏠 RUNNING IN LOCAL MODE (Workers/Task: {args.workers})")
+        print("📊 MODE: RANGE DATA ONLY (Insider, Proprietary, OrderStats)")
 
     # 1. Get Tickers
     tickers = get_tickers_from_latest_stock_price(local_mode=args.local)
@@ -429,57 +480,9 @@ def run():
             futures.append(executor.submit(update_range_dataset, dtype, tickers, args.local, args.workers))
         
         for future in as_completed(futures):
-            # Just wait for completion, exceptions are printed inside
             pass
 
-    # 3. Update Tick Data OR Summary Data
-    label = "PRICE DISTRIBUTION" if args.summary_only else "TICK DATA"
-    print(f"\n=== UPDATING {label} ===")
-    
-    dates_to_process = []
-    
-    if args.tick_start_date:
-        print(f"🚨 STARTING DEEP BACKFILL FROM {args.tick_start_date}")
-        try:
-            start_dt = datetime.strptime(args.tick_start_date, "%Y-%m-%d")
-            end_dt = datetime.now()
-            delta = end_dt - start_dt
-            
-            for i in range(delta.days + 1):
-                target_date = start_dt + timedelta(days=i)
-                if target_date.weekday() < 5:
-                    dates_to_process.append(target_date)
-        except ValueError:
-            print("❌ Invalid date format.")
-            return
-            
-    else:
-        # Today
-        today = datetime.now()
-        if today.weekday() < 5:
-            dates_to_process.append(today)
-        
-        # Short backfill
-        if args.tick_backfill_days > 0:
-            print(f"🔙 Checking backfill for {args.tick_backfill_days} days...")
-            for i in range(1, args.tick_backfill_days + 1):
-                past_date = today - timedelta(days=i)
-                if past_date.weekday() < 5:
-                    dates_to_process.append(past_date)
-
-    if not dates_to_process:
-        print("✅ No dates to process.")
-        return
-
-    print(f"📅 Processing {len(dates_to_process)} days (Parallel Days: {args.parallel_days})...")
-    
-    with ThreadPoolExecutor(max_workers=args.parallel_days) as day_executor:
-        day_futures = [
-            day_executor.submit(update_tick_data, tickers, dt, args.local, args.workers, args.summary_only) 
-            for dt in dates_to_process
-        ]
-        for f in as_completed(day_futures):
-            pass
+    print("\n✅ All tasks completed.")
 
 if __name__ == "__main__":
     run()
