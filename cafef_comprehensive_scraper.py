@@ -325,7 +325,16 @@ def run():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, default="daily", help="daily or backfill")
     parser.add_argument("--tick-backfill-days", type=int, default=0, help="Number of days back to check for missing tick data")
+    parser.add_argument("--start-year", type=int, default=2023, help="Start year for Range Datasets (Prop, Insider, Orders) if no master file exists")
+    parser.add_argument("--tick-start-date", type=str, default=None, help="YYYY-MM-DD start date for Tick Data backfill (CAUTION: Massive download)")
     args = parser.parse_args()
+
+    # Update global config default start dates based on args
+    start_date_str = f"01/01/{args.start_year}"
+    for key in ["proprietary", "insider", "order_stats"]:
+        CONFIG[key]["start_date_default"] = start_date_str
+    
+    print(f"🔧 Configuration: Start Year for Range Data = {args.start_year}")
 
     # 1. Get Tickers
     tickers = get_tickers_from_latest_stock_price()
@@ -333,31 +342,54 @@ def run():
         print("⚠️ No tickers found. Aborting.")
         return
 
-    # 2. Daily Updates (Range Data)
-    # These always run incrementally "up to today"
+    # 2. Update Range Datasets (Propary, Insider, Orders)
+    # These handle "incremental from last date" automatically.
+    # If no master file exists, they will use args.start_year.
     print("\n=== UPDATING RANGE DATASETS ===")
     update_range_dataset("proprietary", tickers)
     update_range_dataset("insider", tickers)
     update_range_dataset("order_stats", tickers)
 
-    # 3. Tick Data
+    # 3. Update Tick Data
     print("\n=== UPDATING TICK DATA ===")
     
-    # Always try Today
-    today = datetime.now()
-    # If today is weekend, maybe skip? API might return empty anyway.
-    if today.weekday() < 5: # Mon-Fri
-        update_tick_data(tickers, today)
+    # Mode A: Explicit Deep Backfill
+    if args.tick_start_date:
+        print(f"🚨 STARTING DEEP BACKFILL FOR TICK DATA FROM {args.tick_start_date}")
+        try:
+            start_dt = datetime.strptime(args.tick_start_date, "%Y-%m-%d")
+            end_dt = datetime.now()
+            delta = end_dt - start_dt
+            
+            print(f"📅 Backfilling {delta.days} days of tick data...")
+            
+            # Iterate through all days
+            for i in range(delta.days + 1):
+                target_date = start_dt + timedelta(days=i)
+                if target_date.weekday() < 5: # Skip weekends
+                    print(f"\nProcessing Date: {target_date.strftime('%Y-%m-%d')}")
+                    update_tick_data(tickers, target_date)
+                else:
+                    print(f"Skipping weekend: {target_date.strftime('%Y-%m-%d')}")
+        except ValueError:
+            print("❌ Invalid date format for --tick-start-date. Use YYYY-MM-DD.")
+            
+    # Mode B: Daily + Short Backfill
     else:
-        print("Today is weekend, skipping today's tick data fetch.")
-    
-    # Backfill Logic (Check previous N days)
-    if args.tick_backfill_days > 0:
-        print(f"🔙 Checking backfill for {args.tick_backfill_days} days...")
-        for i in range(1, args.tick_backfill_days + 1):
-            past_date = today - timedelta(days=i)
-            if past_date.weekday() < 5:
-                update_tick_data(tickers, past_date)
+        # 1. Today
+        today = datetime.now()
+        if today.weekday() < 5:
+            update_tick_data(tickers, today)
+        else:
+            print("Today is weekend, skipping today's tick data fetch.")
+        
+        # 2. Short Lookback (for missed days in automation)
+        if args.tick_backfill_days > 0:
+            print(f"🔙 Checking backfill for {args.tick_backfill_days} days...")
+            for i in range(1, args.tick_backfill_days + 1):
+                past_date = today - timedelta(days=i)
+                if past_date.weekday() < 5:
+                    update_tick_data(tickers, past_date)
 
 if __name__ == "__main__":
     run()
