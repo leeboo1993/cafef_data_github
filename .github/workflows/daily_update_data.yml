@@ -141,7 +141,20 @@ jobs:
           python trading_account.py
 
       # --------------------------------------------------------
-      # 1️⃣1️⃣ Commit and push changes
+      # 1️⃣1️⃣ Run Proprietary & Insider Data Scraper (Incremental)
+      # --------------------------------------------------------
+      - name: 🕵️ Run Proprietary & Insider Scraper
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running Proprietary & Insider Scraper..."
+          python cafef_proprietary_insider_scraper.py
+
+      # --------------------------------------------------------
+      # 1️⃣2️⃣ Commit and push changes
       # --------------------------------------------------------
       - name: 💾 Commit and push CSV changes
         run: |
