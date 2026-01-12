@@ -374,6 +374,7 @@ def update_tick_data(tickers, target_date_obj, local_mode=False, max_workers=10)
     config = CONFIG["tick_data"]
     bucket = os.getenv("R2_BUCKET")
     
+    date_str = target_date_obj.strftime('%Y-%m-%d')
     ddmmyy = target_date_obj.strftime("%d%m%y")
     filename = config["file_pattern"].format(ddmmyy=ddmmyy)
     r2_key = f"{config['r2_folder']}{filename}"
@@ -386,10 +387,10 @@ def update_tick_data(tickers, target_date_obj, local_mode=False, max_workers=10)
         if list_r2_files(bucket, r2_key): should_skip = True
 
     if should_skip:
-        print(f"✅ Tick data for {ddmmyy} already exists.")
+        print(f"[{date_str}] ✅ Tick data already exists.")
         return
 
-    print(f"⚡ Fetching TICK DATA for {target_date_obj.strftime('%Y-%m-%d')} (Workers: {max_workers})...")
+    print(f"[{date_str}] ⚡ Fetching TICK DATA (Workers: {max_workers})...")
     all_ticks = []
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -402,26 +403,26 @@ def update_tick_data(tickers, target_date_obj, local_mode=False, max_workers=10)
                 all_ticks.extend(res)
             
             completed_count += 1
-            if completed_count % 200 == 0:
-                print(f"   ⏱️ Processed {completed_count}/{len(tickers)} (Ticks: {len(all_ticks)})")
+            if completed_count % 500 == 0:
+                print(f"   [{date_str}] ⏱️ Processed {completed_count}/{len(tickers)}...")
 
     if not all_ticks:
-        print(f"🔸 No tick data found for {ddmmyy}.")
+        print(f"[{date_str}] 🔸 No tick data found.")
         return
 
-    print(f"📦 Saving {len(all_ticks)} ticks...")
+    print(f"[{date_str}] 📦 Saving {len(all_ticks)} ticks...")
     df = pd.DataFrame(all_ticks)
     
     if local_mode:
         ensure_folder_exists_local(os.path.dirname(local_path))
         df.to_parquet(local_path, index=False)
-        print(f"💾 Saved locally: {local_path}")
+        print(f"[{date_str}] 💾 Saved locally: {local_path}")
     else:
         ensure_folder_exists(bucket, config["r2_folder"])
         df.to_parquet(local_path, index=False)
         upload_to_r2(local_path, bucket, r2_key)
         os.remove(local_path)
-        print(f"☁️ Uploaded: {r2_key}")
+        print(f"[{date_str}] ☁️ Uploaded: {r2_key}")
 
 # =====================================================
 # 4️⃣ RUNNER
@@ -433,7 +434,8 @@ def run():
     parser.add_argument("--start-year", type=int, default=2023, help="Start year for Range Data")
     parser.add_argument("--tick-start-date", type=str, default=None, help="YYYY-MM-DD start for Tick Backfill")
     parser.add_argument("--local", action="store_true", help="Run local only (Save to disk, skip R2)")
-    parser.add_argument("--workers", type=int, default=10, help="Number of parallel workers (default 10)")
+    parser.add_argument("--workers", type=int, default=10, help="Number of parallel workers per task")
+    parser.add_argument("--parallel-days", type=int, default=1, help="Number of tick-data days to run in parallel")
     
     args = parser.parse_args()
 
@@ -443,7 +445,7 @@ def run():
         CONFIG[key]["start_date_default"] = start_date_str
     
     if args.local:
-        print(f"🏠 RUNNING IN LOCAL MODE (Workers: {args.workers})")
+        print(f"🏠 RUNNING IN LOCAL MODE (Workers/Task: {args.workers}, Parallel Days: {args.parallel_days})")
 
     # 1. Get Tickers
     tickers = get_tickers_from_latest_stock_price(local_mode=args.local)
@@ -452,14 +454,22 @@ def run():
         return
     print(f"📋 Loaded {len(tickers)} tickers.")
 
-    # 2. Update Range Data
-    print("\n=== UPDATING RANGE DATASETS ===")
-    update_range_dataset("proprietary", tickers, local_mode=args.local, max_workers=args.workers)
-    update_range_dataset("insider", tickers, local_mode=args.local, max_workers=args.workers)
-    update_range_dataset("order_stats", tickers, local_mode=args.local, max_workers=args.workers)
+    # 2. Update Range Data (Parallel Categories)
+    print("\n=== UPDATING RANGE DATASETS (PARALLEL) ===")
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = []
+        for dtype in ["proprietary", "insider", "order_stats"]:
+            print(f"🚀 Starting task: {dtype}")
+            futures.append(executor.submit(update_range_dataset, dtype, tickers, args.local, args.workers))
+        
+        for future in as_completed(futures):
+            # Just wait for completion, exceptions are printed inside
+            pass
 
     # 3. Update Tick Data
     print("\n=== UPDATING TICK DATA ===")
+    
+    dates_to_process = []
     
     if args.tick_start_date:
         print(f"🚨 STARTING DEEP BACKFILL FROM {args.tick_start_date}")
@@ -471,28 +481,38 @@ def run():
             for i in range(delta.days + 1):
                 target_date = start_dt + timedelta(days=i)
                 if target_date.weekday() < 5:
-                    print(f"\nProcessing Date: {target_date.strftime('%Y-%m-%d')}")
-                    update_tick_data(tickers, target_date, local_mode=args.local, max_workers=args.workers)
-                else:
-                    print(f"Skipping weekend: {target_date.strftime('%Y-%m-%d')}")
+                    dates_to_process.append(target_date)
         except ValueError:
             print("❌ Invalid date format.")
+            return
             
     else:
         # Today
         today = datetime.now()
         if today.weekday() < 5:
-            update_tick_data(tickers, today, local_mode=args.local, max_workers=args.workers)
+            dates_to_process.append(today)
         
         # Short backfill
         if args.tick_backfill_days > 0:
             print(f"🔙 Checking backfill for {args.tick_backfill_days} days...")
             for i in range(1, args.tick_backfill_days + 1):
                 past_date = today - timedelta(days=i)
-                past_date_str = past_date.strftime("%d/%m/%Y")
-                # Need to manually call update_tick_data
                 if past_date.weekday() < 5:
-                    update_tick_data(tickers, past_date, local_mode=args.local, max_workers=args.workers)
+                    dates_to_process.append(past_date)
+
+    if not dates_to_process:
+        print("✅ No tick dates to process.")
+        return
+
+    print(f"📅 Processing {len(dates_to_process)} days (Parallel Days: {args.parallel_days})...")
+    
+    with ThreadPoolExecutor(max_workers=args.parallel_days) as day_executor:
+        day_futures = [
+            day_executor.submit(update_tick_data, tickers, dt, args.local, args.workers) 
+            for dt in dates_to_process
+        ]
+        for f in as_completed(day_futures):
+            pass
 
 if __name__ == "__main__":
     run()
