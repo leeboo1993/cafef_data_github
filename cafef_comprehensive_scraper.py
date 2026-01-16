@@ -434,10 +434,23 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
             # --- SAFEGUARD: CHECK FILE SIZE DROP ---
             should_save = True
             
-            # Check against local legacy file if exists
+            # Check old size
             old_size = 0
-            if latest_file_path and os.path.exists(latest_file_path):
-                old_size = os.path.getsize(latest_file_path)
+            if latest_file_path:
+                if local_mode:
+                     if os.path.exists(latest_file_path):
+                        old_size = os.path.getsize(latest_file_path)
+                else:
+                    # R2 Mode: Check size from Cloud bucket
+                    try:
+                        # latest_file_path is the R2 key here
+                        s3 = r2_client()
+                        response = s3.head_object(Bucket=bucket, Key=latest_file_path)
+                        old_size = response['ContentLength']
+                        print(f"☁️ R2 Old File Size: {old_size/1024:.2f} KB")
+                    except Exception as e:
+                        print(f"⚠️ Could not get R2 file size for {latest_file_path}: {e}")
+                        old_size = 0
             
             # Estimate new size (roughly)
             temp_check_path = os.path.join(temp_chunk_dir if os.path.exists(temp_chunk_dir) else ".", f"temp_check_{int(time.time())}.parquet")
@@ -456,6 +469,9 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
                 else:
                     if os.path.exists(temp_check_path): os.remove(temp_check_path)
             else:
+                 # If old_size is 0 (first run or check failed), we allow save BUT warn if it's very small
+                 if new_size < 100 * 1024:
+                     print(f"⚠️ Warning: New file is small ({new_size/1024:.2f} KB) and no old file comparison available.")
                  if os.path.exists(temp_check_path): os.remove(temp_check_path)
 
             if should_save:
@@ -475,13 +491,13 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
                     temp_path = f"temp_{new_filename}"
                     r2_key = f"{folder}{new_filename}"
                     df_final.to_parquet(temp_path, index=False)
+                    
+                    # Double Check: If we are calling upload, ensure we import upload_to_r2 correctly
+                    # Reuse the upload_to_r2 function which re-creates client
                     upload_to_r2(temp_path, bucket, r2_key)
-                    print(f"☁️ Uploaded: {r2_key}")
+                    # print(f"☁️ Uploaded: {r2_key}") # upload_to_r2 already prints
                     os.remove(temp_path)
                     
-                    # Cleanup old backups? Maybe not if we are paranoid
-                    # print(f"🧹 Cleaning old backups for {data_type} in R2...")
-                    # clean_old_backups_r2(bucket, folder, keep=2)
             else:
                 print("🛑 Save aborted due to safety check.")
         
