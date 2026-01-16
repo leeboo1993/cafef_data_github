@@ -31,15 +31,18 @@ def extract_date_from_name(name):
 
 def list_r2_files(bucket, prefix):
     s3 = r2_client()
-    paginator = s3.get_paginator('list_objects_v2')
-    pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
-    
     keys = []
     print(f"🔍 Listing R2: s3://{bucket}/{prefix}")
-    for page in pages:
-        if "Contents" in page:
-            for obj in page["Contents"]:
-                keys.append(obj["Key"])
+    
+    try:
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    keys.append(obj["Key"])
+    except Exception as e:
+        print(f"⚠️ Error listing R2 files: {e}")
+        return []
                 
     print(f"   -> Found {len(keys)} files.")
     return keys
