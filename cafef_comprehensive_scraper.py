@@ -412,37 +412,79 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
             
         new_filename = f"{prefix}_{max_date.strftime('%d%m%y')}.parquet"
         
-        if local_mode:
-            new_path = os.path.join(folder, new_filename)
-            df_final.to_parquet(new_path, index=False)
-            print(f"💾 Updated master saved: {new_path}")
-            
-            # Cleanup old local file
-            if latest_file_path and latest_file_path != new_path:
-                try:
-                    os.remove(latest_file_path)
-                    print(f"🗑️ Removed old: {os.path.basename(latest_file_path)}")
-                except: pass
-        else:
-            temp_path = f"temp_{new_filename}"
-            r2_key = f"{folder}{new_filename}"
-            df_final.to_parquet(temp_path, index=False)
-            upload_to_r2(temp_path, bucket, r2_key)
-            print(f"☁️ Uploaded: {r2_key}")
-            os.remove(temp_path)
-            
-            # Cleanup old backups
-            # DISABLED: This was deleting valid data files because they weren't from today
-            # TODO: Re-enable after scraper successfully updates ALL files to current date
-            # print(f"🧹 Cleaning old backups for {data_type} in R2...")
-            # clean_old_backups_r2(bucket, folder, keep=2)
-            
     finally:
         # 6. Cleanup Chunks
         if os.path.exists(temp_chunk_dir):
             print("🧹 Cleaning up temporary chunks...")
             import shutil
             shutil.rmtree(temp_chunk_dir)
+            
+        # 7. Safety Check & Overwrite
+        if 'df_final' in locals() and not df_final.empty:
+            # Determine new filename
+            if data_type in ["insider", "proprietary"]:
+                max_date = datetime.now()
+            else:
+                max_date = datetime.now()
+                if "date" in df_final.columns and not df_final.dropna(subset=["date"]).empty:
+                    max_date = df_final["date"].max()
+                
+            new_filename = f"{prefix}_{max_date.strftime('%d%m%y')}.parquet"
+            
+            # --- SAFEGUARD: CHECK FILE SIZE DROP ---
+            should_save = True
+            
+            # Check against local legacy file if exists
+            old_size = 0
+            if latest_file_path and os.path.exists(latest_file_path):
+                old_size = os.path.getsize(latest_file_path)
+            
+            # Estimate new size (roughly)
+            temp_check_path = os.path.join(temp_chunk_dir if os.path.exists(temp_chunk_dir) else ".", f"temp_check_{int(time.time())}.parquet")
+            df_final.to_parquet(temp_check_path, index=False)
+            new_size = os.path.getsize(temp_check_path)
+            
+            print(f"⚖️ Size Check: Old={old_size/1024:.1f}KB vs New={new_size/1024:.1f}KB")
+            
+            if old_size > 0:
+                # If new file is < 50% of old file and old file was > 1MB, ALARM!
+                if new_size < old_size * 0.5 and old_size > 1024*1024:
+                    print(f"❌ CRITICAL: New file is significantly smaller ({new_size} vs {old_size}). ABORTING SAVE.")
+                    should_save = False
+                    # Keep the temp file for inspection
+                    print(f"⚠️ Inspect temp file at: {temp_check_path}")
+                else:
+                    if os.path.exists(temp_check_path): os.remove(temp_check_path)
+            else:
+                 if os.path.exists(temp_check_path): os.remove(temp_check_path)
+
+            if should_save:
+                if local_mode:
+                    new_path = os.path.join(folder, new_filename)
+                    if latest_file_path and os.path.exists(latest_file_path) and latest_file_path != new_path:
+                         # Backup instead of delete
+                         backup_path = latest_file_path + ".bak"
+                         import shutil
+                         shutil.move(latest_file_path, backup_path)
+                         print(f"📦 Backed up old local file: {os.path.basename(backup_path)}")
+                         
+                    df_final.to_parquet(new_path, index=False)
+                    print(f"💾 Updated master saved: {new_path}")
+
+                else:
+                    temp_path = f"temp_{new_filename}"
+                    r2_key = f"{folder}{new_filename}"
+                    df_final.to_parquet(temp_path, index=False)
+                    upload_to_r2(temp_path, bucket, r2_key)
+                    print(f"☁️ Uploaded: {r2_key}")
+                    os.remove(temp_path)
+                    
+                    # Cleanup old backups? Maybe not if we are paranoid
+                    # print(f"🧹 Cleaning old backups for {data_type} in R2...")
+                    # clean_old_backups_r2(bucket, folder, keep=2)
+            else:
+                print("🛑 Save aborted due to safety check.")
+        
         print("✨ Cleanup done.")
 
 # =====================================================
