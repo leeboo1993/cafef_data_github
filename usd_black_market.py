@@ -460,7 +460,7 @@ def usd_vnd_black_market(
             # Clean old backups (keep 1)
             print("🧹 Cleaning old backups for usd_black_market in R2...")
             # Similarly, we clean the parent folder
-            clean_old_backups_r2(bucket, "cafef_data/usd_black_market/", keep=1)
+            clean_old_backups_r2(bucket, "cafef_data/usd_black_market/", keep=2)
     except Exception as e:
         print(f"⚠️ R2 upload/cleanup error: {e}")
 

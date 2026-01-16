@@ -307,7 +307,7 @@ def update_gold_prices(local_only=False):
             # Clean old backups (keep only 1)
             print("🧹 Cleaning old backups for gold_price in R2...")
             from utils_r2 import clean_old_backups_r2
-            clean_old_backups_r2(BUCKET, f"{PREFIX_MAIN}gold_price/", keep=1)
+            clean_old_backups_r2(BUCKET, f"{PREFIX_MAIN}gold_price/", keep=2)
         else:
             print(f"\n📁 Files saved locally:")
             print(f"   - {json_path}")

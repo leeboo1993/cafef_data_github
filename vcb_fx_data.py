@@ -320,7 +320,7 @@ def scrape_vcb_fx(
              # Clean old backups (keep 1)
             print("🧹 Cleaning old backups for vcb_fx_data in R2...")
             # Similarly, we clean the parent folder
-            clean_old_backups_r2(bucket, "cafef_data/vcb_fx_data/", keep=1)
+            clean_old_backups_r2(bucket, "cafef_data/vcb_fx_data/", keep=2)
     except Exception as e:
         print(f"⚠️ R2 upload/cleanup error: {e}")
 

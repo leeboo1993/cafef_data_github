@@ -398,7 +398,7 @@ async def scrape_vsd_accounts(start_date=None, end_date=None, headless=True):
             # But if there were backups made elsewhere or if the user intends to change structure later,
             # we can run the cleanup on the folder.
             # For now, we'll run it on the parent folder just in case.
-            clean_old_backups_r2(bucket, "cafef_data/stock_trading_account/", keep=1)
+            clean_old_backups_r2(bucket, "cafef_data/stock_trading_account/", keep=2)
 
     except Exception as e:
         print(f"⚠️ R2 upload/cleanup error: {e}")
