@@ -41,6 +41,47 @@ def upload_to_r2(local_path, bucket, key):
     s3.upload_file(local_path, bucket, key)
     print(f"☁️ Uploaded → s3://{bucket}/{key}")
 
+def backup_existing_file(bucket, key):
+    """
+    Create a backup of an existing file BEFORE uploading a new version.
+    This ensures data safety - if upload fails, the backup still exists.
+    
+    Args:
+        bucket: R2 bucket name
+        key: File key (e.g., "cafef_data/deposit_rate/deposit_rate_260115.csv")
+    
+    Returns:
+        bool: True if backup was created (or file didn't exist), False on error
+    """
+    s3 = r2_client()
+    
+    try:
+        # Check if file exists
+        s3.head_object(Bucket=bucket, Key=key)
+    except:
+        # File doesn't exist, nothing to backup
+        return True
+    
+    # Create backup path
+    folder = '/'.join(key.split('/')[:-1]) + '/'
+    filename = key.split('/')[-1]
+    folder_name = folder.rstrip('/').split('/')[-1]
+    backup_key = f"{folder}{folder_name}_backup/{filename}"
+    
+    try:
+        # Copy to backup location
+        s3.copy_object(
+            Bucket=bucket,
+            CopySource={'Bucket': bucket, 'Key': key},
+            Key=backup_key
+        )
+        print(f"📦 Backed up: {filename} → {folder_name}_backup/")
+        return True
+    except Exception as e:
+        print(f"⚠️ Error creating backup for {key}: {e}")
+        return False
+
+
 def download_from_r2(bucket, key, local_path):
     """Download file from R2 to local path."""
     s3 = r2_client()
