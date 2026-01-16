@@ -62,3 +62,26 @@ def clean_old_backups_r2(bucket, prefix, keep=2):
     for old in dated[keep:]:
         s3.delete_object(Bucket=bucket, Key=old)
         print(f"🗑️ Deleted old backup: {old}")
+
+def cleanup_incomplete_uploads(bucket, age_days=1):
+    """Aborts incomplete multipart uploads older than specified days."""
+    s3 = r2_client()
+    try:
+        response = s3.list_multipart_uploads(Bucket=bucket)
+        if "Uploads" not in response:
+            print("✅ No stuck multipart uploads found.")
+            return
+
+        print(f"🧹 Checking for stuck uploads in {bucket}...")
+        for upload in response["Uploads"]:
+            key = upload["Key"]
+            upload_id = upload["UploadId"]
+            initiated = upload["Initiated"]
+            
+            # Check age
+            if (datetime.now(initiated.tzinfo) - initiated).days >= age_days:
+                print(f"⚠️ Aborting stuck upload: {key} (Initiated: {initiated})")
+                s3.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+                print(f"   -> Aborted.")
+    except Exception as e:
+        print(f"⚠️ Error cleaning uploads: {e}")

@@ -157,7 +157,20 @@ jobs:
 
 
       # --------------------------------------------------------
-      # 1️⃣2️⃣ Final confirmation log
+      # 1️⃣2️⃣ Cleanup Stuck Uploads
+      # --------------------------------------------------------
+      - name: 🧹 Cleanup Stuck Multipart Uploads
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Cleaning up interrupted/stuck uploads..."
+          python run_cleanup.py
+
+      # --------------------------------------------------------
+      # 1️⃣3️⃣ Final confirmation log
       # --------------------------------------------------------
       - name: ✅ Summary
         run: |
