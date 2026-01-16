@@ -498,6 +498,10 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
                     # print(f"☁️ Uploaded: {r2_key}") # upload_to_r2 already prints
                     os.remove(temp_path)
                     
+                    # Cleanup old backups (Keep 2: Current + 1 Backup)
+                    print(f"🧹 Cleaning old history for {data_type}...")
+                    clean_old_backups_r2(bucket, folder, pattern=prefix, keep=2)
+                    
             else:
                 print("🛑 Save aborted due to safety check.")
         
