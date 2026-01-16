@@ -383,12 +383,25 @@ async def scrape_vsd_accounts(start_date=None, end_date=None, headless=True):
         import os
         if all([os.getenv("R2_ENDPOINT"), os.getenv("R2_ACCESS_KEY_ID"), 
                 os.getenv("R2_SECRET_ACCESS_KEY"), os.getenv("R2_BUCKET")]):
-            from utils_r2 import upload_to_r2
+            from utils_r2 import upload_to_r2, clean_old_backups_r2
             bucket = os.getenv("R2_BUCKET")
             r2_key = f"cafef_data/stock_trading_account/stock_trading_account.csv"
             upload_to_r2(CSV_FILE, bucket, r2_key)
+            print(f"☁️ Uploaded to R2: {r2_key}")
+            
+            # Clean old backups (keep 1)
+            print("🧹 Cleaning old backups for trading_account in R2...")
+            # Note: The key structure here is slightly different (single file replaced often), 
+            # but if there were versioned files, this would clean them.
+            # However, since this script overwrites the SAME file 'stock_trading_account.csv', 
+            # there are no "old versions" with timestamps in the filename to clean in the same folder.
+            # But if there were backups made elsewhere or if the user intends to change structure later,
+            # we can run the cleanup on the folder.
+            # For now, we'll run it on the parent folder just in case.
+            clean_old_backups_r2(bucket, "cafef_data/stock_trading_account/", keep=1)
+
     except Exception as e:
-        print(f"⚠️ R2 upload skipped: {e}")
+        print(f"⚠️ R2 upload/cleanup error: {e}")
 
 
 # ======================================================

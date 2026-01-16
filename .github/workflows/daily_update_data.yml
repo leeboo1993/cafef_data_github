@@ -154,18 +154,7 @@ jobs:
           # Run with a 5 business day lookback to ensure gapless data
           python cafef_comprehensive_scraper.py --lookback-days 5 --workers 20
 
-      # --------------------------------------------------------
-      # 1️⃣2️⃣ Commit and push changes
-      # --------------------------------------------------------
-      - name: 💾 Commit and push CSV changes
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add vcb_fx_data/vcb_fx_data.csv usd_black_market/usd_market_data.csv stock_trading_account/stock_trading_account.csv
-          git diff --staged --quiet || git commit -m "🤖 Auto-update: VCB FX, USD & Trading Account data ($(date +'%Y-%m-%d'))"
-          git fetch origin main
-          git rebase origin/main
-          git push origin HEAD:main
+
 
       # --------------------------------------------------------
       # 1️⃣2️⃣ Final confirmation log

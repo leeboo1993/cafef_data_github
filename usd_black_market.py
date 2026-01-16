@@ -405,12 +405,18 @@ def usd_vnd_black_market(
         import os
         if all([os.getenv("R2_ENDPOINT"), os.getenv("R2_ACCESS_KEY_ID"), 
                 os.getenv("R2_SECRET_ACCESS_KEY"), os.getenv("R2_BUCKET")]):
-            from utils_r2 import upload_to_r2
+            from utils_r2 import upload_to_r2, clean_old_backups_r2
             bucket = os.getenv("R2_BUCKET")
             r2_key = f"cafef_data/usd_black_market/usd_market_data.csv"
             upload_to_r2(csv_path, bucket, r2_key)
+            print(f"☁️ Uploaded to R2: {r2_key}")
+            
+            # Clean old backups (keep 1)
+            print("🧹 Cleaning old backups for usd_black_market in R2...")
+            # Similarly, we clean the parent folder
+            clean_old_backups_r2(bucket, "cafef_data/usd_black_market/", keep=1)
     except Exception as e:
-        print(f"⚠️ R2 upload skipped: {e}")
+        print(f"⚠️ R2 upload/cleanup error: {e}")
 
 
 # ======================================================

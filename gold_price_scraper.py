@@ -297,79 +297,34 @@ def update_gold_prices(local_only=False):
     check_existing_json_dates(combined)
 
     # --- Upload to R2 (skip if local_only) ---
-    if not local_only and BUCKET:
-        # Before uploading new files, move current files to backup
-        from utils_r2 import list_r2_files
-        
-        # List current files - only in the main gold_price folder, not in backup subfolders
-        current_files = list_r2_files(BUCKET, f"{PREFIX_MAIN}gold_price/")
-        # Filter to only files directly in gold_price/, exclude backup subfolder
-        gold_files = [
-            f for f in current_files 
-            if 'gold_price_' in f 
-            and (f.endswith('.json') or f.endswith('.csv'))
-            and 'backup' not in f  # Exclude files already in any backup folders
-        ]
-        
-        # Move current files to backup (only if they're different from what we're uploading)
-        backup_prefix = f"{PREFIX_MAIN}gold_price_backup/"
-        s3 = r2_client()
-        
-        for old_file in gold_files:
-            # Skip if it's the same file we're about to upload
-            if date_suffix in old_file:
-                continue
+    try:
+        if not local_only and BUCKET:
+            # Upload new files
+            upload_to_r2(str(json_path), BUCKET, f"{PREFIX_MAIN}gold_price/gold_price_{date_suffix}.json")
+            upload_to_r2(str(csv_path), BUCKET, f"{PREFIX_MAIN}gold_price/gold_price_{date_suffix}.csv")
+            print(f"☁️ Uploaded new gold data (JSON + CSV) to R2 with date suffix: {date_suffix}")
             
-            # Extract just the filename from the old file path
-            filename = old_file.split('/')[-1]
-            backup_key = f"{backup_prefix}{filename}"
-            s3.copy_object(
-                Bucket=BUCKET,
-                CopySource={'Bucket': BUCKET, 'Key': old_file},
-                Key=backup_key
-            )
-            print(f"📦 Backed up {old_file} → {backup_key}")
-        
-        # Clean old backups (keep only 1)
-        backup_files = list_r2_files(BUCKET, backup_prefix)
-        backup_gold = sorted([f for f in backup_files if 'gold_price_' in f and (f.endswith('.json') or f.endswith('.csv'))])
-        
-        # Group by date and keep only the most recent
-        from collections import defaultdict
-        by_date = defaultdict(list)
-        for f in backup_gold:
-            match = re.search(r'gold_price_(\d{6})', f)
-            if match:
-                by_date[match.group(1)].append(f)
-        
-        # Keep only the most recent date
-        if len(by_date) > 1:
-            dates_sorted = sorted(by_date.keys(), reverse=True)
-            for old_date in dates_sorted[1:]:  # Skip the most recent
-                for f in by_date[old_date]:
-                    s3.delete_object(Bucket=BUCKET, Key=f)
-                    print(f"🗑️ Deleted old backup: {f}")
-        
-        # Upload new files
-        upload_to_r2(str(json_path), BUCKET, f"{PREFIX_MAIN}gold_price/gold_price_{date_suffix}.json")
-        upload_to_r2(str(csv_path), BUCKET, f"{PREFIX_MAIN}gold_price/gold_price_{date_suffix}.csv")
-        print(f"☁️ Uploaded new gold data (JSON + CSV) to R2 with date suffix: {date_suffix}")
-        
+            # Clean old backups (keep only 1)
+            print("🧹 Cleaning old backups for gold_price in R2...")
+            from utils_r2 import clean_old_backups_r2
+            clean_old_backups_r2(BUCKET, f"{PREFIX_MAIN}gold_price/", keep=1)
+        else:
+            print(f"\n📁 Files saved locally:")
+            print(f"   - {json_path}")
+            print(f"   - {csv_path}")
+            print(f"\n💡 Review the files, then run with R2 upload enabled.")
+
+    finally:
         # Clean up local files
         try:
             for f in SAVE_DIR.glob("gold_price_*"):
                 os.remove(f)
                 print(f"🧹 Deleted local file: {f}")
-            if not any(SAVE_DIR.iterdir()):
+            if SAVE_DIR.exists() and not any(SAVE_DIR.iterdir()):
                 SAVE_DIR.rmdir()
                 print(f"🗑️ Removed empty folder: {SAVE_DIR}")
         except Exception as e:
             print(f"⚠️ Cleanup error: {e}")
-    else:
-        print(f"\n📁 Files saved locally:")
-        print(f"   - {json_path}")
-        print(f"   - {csv_path}")
-        print(f"\n💡 Review the files, then run with R2 upload enabled.")
 
 
 # ======================================================

@@ -274,16 +274,23 @@ def scrape_vcb_fx(
     )
     
     # Upload to R2 if credentials are available
+    # Upload to R2 if credentials are available
     try:
         import os
         if all([os.getenv("R2_ENDPOINT"), os.getenv("R2_ACCESS_KEY_ID"), 
                 os.getenv("R2_SECRET_ACCESS_KEY"), os.getenv("R2_BUCKET")]):
-            from utils_r2 import upload_to_r2
+            from utils_r2 import upload_to_r2, clean_old_backups_r2
             bucket = os.getenv("R2_BUCKET")
             r2_key = f"cafef_data/vcb_fx_data/vcb_fx_data.csv"
             upload_to_r2(out_csv, bucket, r2_key)
+            print(f"☁️ Uploaded to R2: {r2_key}")
+            
+             # Clean old backups (keep 1)
+            print("🧹 Cleaning old backups for vcb_fx_data in R2...")
+            # Similarly, we clean the parent folder
+            clean_old_backups_r2(bucket, "cafef_data/vcb_fx_data/", keep=1)
     except Exception as e:
-        print(f"⚠️ R2 upload skipped: {e}")
+        print(f"⚠️ R2 upload/cleanup error: {e}")
 
 
 # ======================================================
