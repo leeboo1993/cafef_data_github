@@ -13,13 +13,21 @@ def r2_client():
     )
 
 def extract_date_from_name(name):
-    m = re.search(r"(\d{6})\.parquet$", name)
-    if not m:
-        return None
-    try:
-        return datetime.strptime(m.group(1), "%d%m%y")
-    except Exception:
-        return None
+    """Extract date from filenames with _DDMMYY or _YYMMDD patterns."""
+    # Try DDMMYY pattern first (e.g., all_insider_trading_120126.parquet)
+    m = re.search(r"_(\d{6})\.parquet$", name)
+    if m:
+        date_str = m.group(1)
+        # Try DDMMYY format first
+        try:
+            return datetime.strptime(date_str, "%d%m%y")
+        except:
+            # Try YYMMDD format as fallback
+            try:
+                return datetime.strptime(date_str, "%y%m%d")
+            except:
+                pass
+    return None
 
 def list_r2_files(bucket, prefix):
     s3 = r2_client()
