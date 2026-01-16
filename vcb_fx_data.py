@@ -110,8 +110,20 @@ async def _scrape_vcb_fx(
         if all([os.getenv("R2_ENDPOINT"), os.getenv("R2_ACCESS_KEY_ID"), 
                 os.getenv("R2_SECRET_ACCESS_KEY"), os.getenv("R2_BUCKET")]):
             from utils_r2 import download_from_r2
+            from utils_r2 import download_from_r2, list_r2_files
             bucket = os.getenv("R2_BUCKET")
-            r2_key = f"cafef_data/vcb_fx_data/vcb_fx_data.csv"
+            # Find latest file
+            files = list_r2_files(bucket, "cafef_data/vcb_fx_data/vcb_fx_data_")
+            # Also support legacy static name for transition
+            if not files:
+                 files = list_r2_files(bucket, "cafef_data/vcb_fx_data/vcb_fx_data.csv")
+            
+            if files:
+                # Sort by name (YYMMDD ensures correct order)
+                r2_key = sorted(files)[-1]
+            else:
+                r2_key = "cafef_data/vcb_fx_data/vcb_fx_data.csv" # Fallback attempt
+            
             
             # Create directory if it doesn't exist
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -281,7 +293,27 @@ def scrape_vcb_fx(
                 os.getenv("R2_SECRET_ACCESS_KEY"), os.getenv("R2_BUCKET")]):
             from utils_r2 import upload_to_r2, clean_old_backups_r2
             bucket = os.getenv("R2_BUCKET")
-            r2_key = f"cafef_data/vcb_fx_data/vcb_fx_data.csv"
+            # Determine date suffix from the latest date in the file
+            # Since we just wrote the file, we can read the last line or just check end_date (but end_date might be today while data is old)
+            # Better to read the file or assume 'end_date' if update=True.
+            # Let's read the max date from the CSV slightly inefficiently but safely.
+            max_date_str = ""
+            with open(out_csv, "r", encoding="utf-8-sig") as f:
+                 # Skip header
+                 next(f, None)
+                 dates = [line.split(",")[0] for line in f if line.strip()]
+                 if dates:
+                     max_date_str = max(dates) # YYYY-MM-DD sorts correctly
+            
+            if max_date_str:
+                dt_obj = datetime.strptime(max_date_str, "%Y-%m-%d")
+                date_suffix = dt_obj.strftime("%y%m%d")
+                r2_key = f"cafef_data/vcb_fx_data/vcb_fx_data_{date_suffix}.csv"
+            else:
+                # Fallback to today if empty
+                date_suffix = datetime.now().strftime("%y%m%d")
+                r2_key = f"cafef_data/vcb_fx_data/vcb_fx_data_{date_suffix}.csv"
+
             upload_to_r2(out_csv, bucket, r2_key)
             print(f"☁️ Uploaded to R2: {r2_key}")
             

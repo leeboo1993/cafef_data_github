@@ -235,8 +235,18 @@ def usd_vnd_black_market(
             if all([os.getenv("R2_ENDPOINT"), os.getenv("R2_ACCESS_KEY_ID"), 
                     os.getenv("R2_SECRET_ACCESS_KEY"), os.getenv("R2_BUCKET")]):
                 from utils_r2 import download_from_r2
+                from utils_r2 import download_from_r2, list_r2_files
                 bucket = os.getenv("R2_BUCKET")
-                r2_key = f"cafef_data/usd_black_market/usd_market_data.csv"
+                
+                # Find latest file
+                files = list_r2_files(bucket, "cafef_data/usd_black_market/usd_market_data_")
+                if not files:
+                     files = list_r2_files(bucket, "cafef_data/usd_black_market/usd_market_data.csv")
+                
+                if files:
+                    r2_key = sorted(files)[-1]
+                else:
+                    r2_key = "cafef_data/usd_black_market/usd_market_data.csv"
                 
                 # Create directory if it doesn't exist
                 from pathlib import Path
@@ -407,7 +417,43 @@ def usd_vnd_black_market(
                 os.getenv("R2_SECRET_ACCESS_KEY"), os.getenv("R2_BUCKET")]):
             from utils_r2 import upload_to_r2, clean_old_backups_r2
             bucket = os.getenv("R2_BUCKET")
-            r2_key = f"cafef_data/usd_black_market/usd_market_data.csv"
+            # Determine date suffix from the latest date in the file
+            max_date_str = ""
+            with open(csv_path, "r", encoding="utf-8-sig") as f:
+                 # Skip header
+                 try:
+                    # DictReader handles header skipping
+                    for row in csv.DictReader(f):
+                         if row["date"]:
+                             if row["date"] > max_date_str:
+                                 max_date_str = row["date"]
+                 except: pass # Empty file
+            
+            if max_date_str:
+                # Date is DD-MM-YYYY in this file?
+                # Check read_csv_rows logic: "date": black["date"], which comes from date_val which is from value attribute of input
+                # Scraper uses "value" attribute. Code in scrape_black_market uses: url = f"...?date={date_str}" (YYYY-MM-DD input?)
+                # Actually scrape_black_market returns "date": date_val.
+                # In main loop: d = cur.strftime("%d-%m-%Y").
+                
+                # Careful: The CSV writes DD-MM-YYYY or YYYY-MM-DD?
+                # The prompt: "d = cur.strftime("%d-%m-%Y")". So filenames are DD-MM-YYYY.
+                # But read_csv_reader fieldnames don't enforce type.
+                # Let's try to parse whatever max_date_str is.
+                try:
+                    dt_obj = datetime.datetime.strptime(max_date_str, "%d-%m-%Y")
+                except:
+                    try:
+                        dt_obj = datetime.datetime.strptime(max_date_str, "%Y-%m-%d")
+                    except:
+                        dt_obj = datetime.datetime.now()
+
+                date_suffix = dt_obj.strftime("%y%m%d")
+                r2_key = f"cafef_data/usd_black_market/usd_market_data_{date_suffix}.csv"
+            else:
+                date_suffix = datetime.datetime.now().strftime("%y%m%d")
+                r2_key = f"cafef_data/usd_black_market/usd_market_data_{date_suffix}.csv"
+
             upload_to_r2(csv_path, bucket, r2_key)
             print(f"☁️ Uploaded to R2: {r2_key}")
             
