@@ -401,9 +401,14 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
             df_final = df_final.drop_duplicates()
         
         # Determine new filename
-        max_date = datetime.now()
-        if "date" in df_final.columns and not df_final.dropna(subset=["date"]).empty:
-            max_date = df_final["date"].max()
+        # For insider/proprietary: always use today's date to show last check date
+        # For order_stats: use max date from data
+        if data_type in ["insider", "proprietary"]:
+            max_date = datetime.now()
+        else:
+            max_date = datetime.now()
+            if "date" in df_final.columns and not df_final.dropna(subset=["date"]).empty:
+                max_date = df_final["date"].max()
             
         new_filename = f"{prefix}_{max_date.strftime('%d%m%y')}.parquet"
         
