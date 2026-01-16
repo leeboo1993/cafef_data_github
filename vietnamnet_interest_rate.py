@@ -436,8 +436,18 @@ def sync_to_r2(combined_df, local_only=False):
         if not local_only and BUCKET:
             # Upload new files
             ensure_folder_exists(BUCKET, PREFIX_MAIN)
-            upload_to_r2(str(json_path), BUCKET, f"{PREFIX_MAIN}deposit_rate/deposit_rate_{date_suffix}.json")
-            upload_to_r2(str(csv_path), BUCKET, f"{PREFIX_MAIN}deposit_rate/deposit_rate_{date_suffix}.csv")
+            
+            json_r2_key = f"{PREFIX_MAIN}deposit_rate/deposit_rate_{date_suffix}.json"
+            csv_r2_key = f"{PREFIX_MAIN}deposit_rate/deposit_rate_{date_suffix}.csv"
+
+            from utils_r2 import upload_to_r2, backup_existing_file
+            
+            # Backup existing files before upload (safety first!)
+            backup_existing_file(BUCKET, json_r2_key)
+            backup_existing_file(BUCKET, csv_r2_key)
+            
+            upload_to_r2(str(json_path), BUCKET, json_r2_key)
+            upload_to_r2(str(csv_path), BUCKET, csv_r2_key)
             print(f"📤 All deposit rate files synced to R2 with date suffix: {date_suffix}")
 
             # Clean old backups (keep only 1)
