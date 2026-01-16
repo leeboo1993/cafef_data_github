@@ -203,7 +203,7 @@ def backup_and_cleanup_r2(bucket, folder, file_pattern="", keep=2):
                 # Copy to backup location
                 s3.copy_object(
                     Bucket=bucket,
-                    Copy Source={'Bucket': bucket, 'Key': old_file},
+                    CopySource={'Bucket': bucket, 'Key': old_file},
                     Key=new_key
                 )
                 # Delete from main folder
