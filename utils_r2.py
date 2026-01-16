@@ -31,10 +31,18 @@ def extract_date_from_name(name):
 
 def list_r2_files(bucket, prefix):
     s3 = r2_client()
-    resp = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
-    if "Contents" not in resp:
-        return []
-    return [obj["Key"] for obj in resp["Contents"]]
+    paginator = s3.get_paginator('list_objects_v2')
+    pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
+    
+    keys = []
+    print(f"🔍 Listing R2: s3://{bucket}/{prefix}")
+    for page in pages:
+        if "Contents" in page:
+            for obj in page["Contents"]:
+                keys.append(obj["Key"])
+                
+    print(f"   -> Found {len(keys)} files.")
+    return keys
 
 def upload_to_r2(local_path, bucket, key):
     s3 = r2_client()
