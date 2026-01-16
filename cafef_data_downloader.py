@@ -170,9 +170,12 @@ def validate_and_process_files(file_paths, config):
 # =====================================================
 # 4️⃣ MAIN RUNNER
 # =====================================================
-def run_cafef_downloader(max_days_back=5):
+# =====================================================
+# 4️⃣ MAIN RUNNER
+# =====================================================
+def run_cafef_downloader(max_days_back=5, local_mode=False):
     bucket = os.getenv("R2_BUCKET")
-    if not bucket:
+    if not local_mode and not bucket:
         print("❌ Error: R2_BUCKET env var not set.")
         return
 
@@ -180,75 +183,104 @@ def run_cafef_downloader(max_days_back=5):
     if work_dir.exists():
         shutil.rmtree(work_dir)
     work_dir.mkdir()
+    
+    try:
+        # Destination for local mode
+        local_storage_dir = Path.cwd() / "cafef_data"
+        if local_mode and not local_storage_dir.exists():
+            local_storage_dir.mkdir()
 
-    for data_type, config in DATA_CONFIG.items():
-        print(f"\n🚀 Processing: {data_type.upper()}")
-        
-        # Ensure R2 folder exists
-        ensure_folder_exists(bucket, config["r2_folder"])
-        
-        # Check if today's data already exists to avoid re-work
-        # (Optimistic check: if we have a file with today's date)
-        # However, CafeF uploads data later in the day, so we might technically run this at night.
-        # Let's perform the check logic:
-        
-        # For this script, we iterate backwards and find the FIRST available data
-        # If we successfully process a date, we stop (assuming daily run).
-        # OR we can force check 'today' specifically.
-        
-        found_data = False
-        for i in range(max_days_back):
-            date_obj = datetime.now() - timedelta(days=i)
-            file_date_str = date_obj.strftime("%d%m%y")
+        for data_type, config in DATA_CONFIG.items():
+            print(f"\n🚀 Processing: {data_type.upper()}")
             
-            # Check if this date's file already exists in R2
-            expected_r2_key = f"{config['r2_folder']}{config['file_pattern']}{file_date_str}.parquet"
-            # Note: utils_r2 doesn't have a simple exists check, but we can list files.
-            # To save API calls, we could fetch list once. But explicit check is fine.
-            existing = list_r2_files(bucket, expected_r2_key)
-            if existing:
-                print(f"✅ Data for {file_date_str} already exists in R2: {expected_r2_key}")
+            # Ensure R2 folder exists (skip in local mode)
+            if not local_mode:
+                ensure_folder_exists(bucket, config["r2_folder"])
+            else:
+                 # Ensure local subfolder exists
+                 subfolder = local_storage_dir / config["r2_folder"].replace("cafef_data/", "")
+                 subfolder.mkdir(parents=True, exist_ok=True)
+            
+            found_data = False
+            for i in range(max_days_back):
+                date_obj = datetime.now() - timedelta(days=i)
+                file_date_str = date_obj.strftime("%d%m%y")
+                
+                filename = f"{config['file_pattern']}{file_date_str}.parquet"
+                expected_r2_key = f"{config['r2_folder']}{filename}"
+                
+                # Check existence
+                exists = False
+                if local_mode:
+                     # Check local storage
+                     # config['r2_folder'] includes cafef_data/ prefix, need to map correctly
+                     # e.g. cafef_data/vn_index/ -> local_storage_dir / vn_index / filename
+                     rel_folder = config["r2_folder"].replace("cafef_data/", "")
+                     local_check_path = local_storage_dir / rel_folder / filename
+                     if local_check_path.exists(): exists = True
+                else:
+                    existing = list_r2_files(bucket, expected_r2_key)
+                    if existing: exists = True
+                    
+                if exists:
+                    print(f"✅ Data for {file_date_str} already exists: {filename}")
+                    found_data = True
+                    break
+                
+                # Try to download
+                url, _ = build_cafef_url(config["url_pattern"], date_obj)
+                extracted_files = download_and_extract(url, str(work_dir))
+                
+                if not extracted_files:
+                    print(f"🔸 No data found for {date_obj.strftime('%Y-%m-%d')}...")
+                    continue
+                
+                # Process
+                df = validate_and_process_files(extracted_files, config)
+                if df is None or df.empty:
+                    print(f"🔸 Extracted files were invalid or empty for {date_obj.strftime('%Y-%m-%d')}.")
+                    for f in extracted_files:
+                        try: os.remove(f) 
+                        except: pass
+                    continue
+                
+                # Convert to Parquet
+                temp_parquet = work_dir / filename
+                df.to_parquet(temp_parquet, index=False)
+                print(f"💾 Saved parquet: {temp_parquet.name} ({len(df)} rows)")
+                
+                if local_mode:
+                     rel_folder = config["r2_folder"].replace("cafef_data/", "")
+                     final_local_path = local_storage_dir / rel_folder / filename
+                     final_local_path.parent.mkdir(parents=True, exist_ok=True)
+                     shutil.move(str(temp_parquet), str(final_local_path))
+                     print(f"✅ Moved to local storage: {final_local_path}")
+                else:
+                    upload_to_r2(str(temp_parquet), bucket, expected_r2_key)
+                    os.remove(temp_parquet)
+                    
                 found_data = True
-                break # Move to next data_type if we found the latest data
-            
-            # Try to download
-            url, _ = build_cafef_url(config["url_pattern"], date_obj)
-            extracted_files = download_and_extract(url, str(work_dir))
-            
-            if not extracted_files:
-                print(f"🔸 No data found for {date_obj.strftime('%Y-%m-%d')}...")
-                continue
-            
-            # Process
-            df = validate_and_process_files(extracted_files, config)
-            if df is None or df.empty:
-                print(f"🔸 Extracted files were invalid or empty for {date_obj.strftime('%Y-%m-%d')}.")
-                # Cleanup extracted files for next iteration
-                for f in extracted_files:
-                    try: os.remove(f) 
-                    except: pass
-                continue
-            
-            # Convert to Parquet
-            local_parquet = work_dir / f"{config['file_pattern']}{file_date_str}.parquet"
-            df.to_parquet(local_parquet, index=False)
-            print(f"💾 Saved local parquet: {local_parquet.name} ({len(df)} rows)")
-            
-            # Upload
-            upload_to_r2(str(local_parquet), bucket, expected_r2_key)
-            found_data = True
-            
-            # Clean up local file
-            os.remove(local_parquet)
-            break # Stop looking back once we found the latest valid data
-            
-        if not found_data:
-            print(f"❌ Could not find valid data for {data_type} in last {max_days_back} days.")
+                break 
+                
+            if not found_data:
+                print(f"❌ Could not find valid data for {data_type} in last {max_days_back} days.")
+            else:
+                # Cleanup old backups on R2 if not local
+                if not local_mode:
+                    print(f"🧹 Cleaning old backups for {data_type} in R2...")
+                    clean_old_backups_r2(bucket, config["r2_folder"], keep=1) # Keep last 1 file
 
-    # Cleanup temp dir
-    if work_dir.exists():
-        shutil.rmtree(work_dir)
-    print("\n🎉 All tasks completed.")
+    finally:
+        # Cleanup temp dir
+        if work_dir.exists():
+            shutil.rmtree(work_dir)
+        print("\n🎉 All tasks completed (Temp files cleaned).")
 
 if __name__ == "__main__":
-    run_cafef_downloader()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--local", action="store_true", help="Run in local mode (save to cafef_data/ folder)")
+    parser.add_argument("--days", type=int, default=5, help="Max days back to search")
+    args = parser.parse_args()
+    
+    run_cafef_downloader(max_days_back=args.days, local_mode=args.local)

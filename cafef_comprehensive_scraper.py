@@ -34,13 +34,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import R2 utils conditionally or mock
 try:
-    from utils_r2 import upload_to_r2, download_from_r2, list_r2_files, ensure_folder_exists
+    from utils_r2 import upload_to_r2, download_from_r2, list_r2_files, ensure_folder_exists, clean_old_backups_r2
 except ImportError:
     # Mocks for when utils_r2 is missing entirely (unlikely but safe)
     def upload_to_r2(*args): pass
     def download_from_r2(*args): return False
     def list_r2_files(*args): return []
     def ensure_folder_exists(*args): pass
+    def clean_old_backups_r2(*args): pass
 
 # =====================================================
 # 2️⃣ CONFIGURATION
@@ -268,167 +269,174 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
         ensure_folder_exists_local(folder)
         
     # 1. Find and Load Master
-    df_master = pd.DataFrame()
-    last_update_map = {}
-    
-    latest_file_path = find_latest_master_file(folder, prefix, local_mode, bucket)
-    
-    if latest_file_path:
-        print(f"📥 Loading master: {latest_file_path}")
-        local_load_path = latest_file_path
+    try:
+        df_master = pd.DataFrame()
+        last_update_map = {}
         
-        if not local_mode:
-            local_load_path = f"temp_master_{data_type}.parquet"
-            download_from_r2(bucket, latest_file_path, local_load_path)
+        latest_file_path = find_latest_master_file(folder, prefix, local_mode, bucket)
+        
+        if latest_file_path:
+            print(f"📥 Loading master: {latest_file_path}")
+            local_load_path = latest_file_path
             
-        try:
-            df_master = pd.read_parquet(local_load_path)
-            if "ngay" in df_master.columns: df_master = df_master.rename(columns={"ngay": "date"})
-            if "date" in df_master.columns:
-                df_master["date"] = pd.to_datetime(df_master["date"])
-                last_update_map = df_master.groupby("ticker")["date"].max().to_dict()
-                print(f"✅ Loaded history: {len(df_master)} rows (Latest: {df_master['date'].max().strftime('%Y-%m-%d')})")
-            else:
-                df_master = pd.DataFrame()
-        except:
-            df_master = pd.DataFrame()
-            
-        if not local_mode and os.path.exists(local_load_path):
-            os.remove(local_load_path)
-    else:
-        print(f"✨ No history found. Starting fresh.")
-
-    # 2. Check for Existing Chunks (Resume Capability)
-    processed_tickers = set()
-    existing_chunks = [os.path.join(temp_chunk_dir, f) for f in os.listdir(temp_chunk_dir) if f.endswith(".parquet")]
-    
-    if existing_chunks:
-        print(f"🔄 Found {len(existing_chunks)} partial chunks. Resuming...")
-        for chunk in existing_chunks:
+            if not local_mode:
+                local_load_path = f"temp_master_{data_type}.parquet"
+                download_from_r2(bucket, latest_file_path, local_load_path)
+                
             try:
-                # We interpret "processed" as tickers present in these chunks
-                # Optimally we would just read the 'ticker' column unique values
-                df_chunk = pd.read_parquet(chunk, columns=["ticker"])
-                chunk_tickers = df_chunk["ticker"].unique()
-                processed_tickers.update(chunk_tickers)
+                df_master = pd.read_parquet(local_load_path)
+                if "ngay" in df_master.columns: df_master = df_master.rename(columns={"ngay": "date"})
+                if "date" in df_master.columns:
+                    df_master["date"] = pd.to_datetime(df_master["date"])
+                    last_update_map = df_master.groupby("ticker")["date"].max().to_dict()
+                    print(f"✅ Loaded history: {len(df_master)} rows (Latest: {df_master['date'].max().strftime('%Y-%m-%d')})")
+                else:
+                    df_master = pd.DataFrame()
             except:
-                pass
-        print(f"⏩ Skipping {len(processed_tickers)} already processed tickers.")
-
-    # Filter out processed tickers
-    tickers_to_process = [t for t in tickers if t not in processed_tickers]
-    
-    if not tickers_to_process:
-        print("✅ All tickers already processed in chunks. Proceeding to merge.")
-    else:
-        # 3. Batch Processing
-        batch_size = 500
-        total_batches = (len(tickers_to_process) // batch_size) + 1
-        
-        print(f"🔄 Updating {len(tickers_to_process)} tickers for {data_type} (Workers: {max_workers})...")
-        print(f"📦 Batch Processing: {total_batches} batches of ~{batch_size} tickers.")
-
-        for batch_idx in range(total_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = start_idx + batch_size
-            batch_tickers = tickers_to_process[start_idx:end_idx]
-            
-            if not batch_tickers: continue
-            
-            print(f"   [{data_type}] 🚀 Batch {batch_idx + 1}/{total_batches} ({len(batch_tickers)} tickers)...")
-            
-            new_rows = []
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {executor.submit(process_ticker_range_data, t, config, last_update_map): t for t in batch_tickers}
+                df_master = pd.DataFrame()
                 
-                for future in as_completed(futures):
-                    res = future.result()
-                    if res:
-                        new_rows.extend(res)
+            if not local_mode and os.path.exists(local_load_path):
+                os.remove(local_load_path)
+        else:
+            print(f"✨ No history found. Starting fresh.")
 
-            # Save Batch
-            if new_rows:
-                df_batch = pd.DataFrame(new_rows)
-                df_batch.columns = [c.lower() for c in df_batch.columns]
-                
-                # Deduplicate columns (e.g. Symbol vs symbol)
-                df_batch = df_batch.loc[:, ~df_batch.columns.duplicated()]
-                
-                # Pre-clean batch
-                if "ngay" in df_batch.columns: df_batch = df_batch.rename(columns={"ngay": "date"})
-                if "date" in df_batch.columns: df_batch["date"] = pd.to_datetime(df_batch["date"], dayfirst=True, errors='coerce')
-                df_batch = clean_dataframe_dates(df_batch)
-                
-                rename_map = {"symbol": "ticker", "giatrirong": "net_value", "khoiluongrong": "net_volume", "nguoithuchien": "executor"}
-                df_batch = df_batch.rename(columns=rename_map)
+        # 2. Check for Existing Chunks (Resume Capability)
+        processed_tickers = set()
+        existing_chunks = [os.path.join(temp_chunk_dir, f) for f in os.listdir(temp_chunk_dir) if f.endswith(".parquet")]
+        
+        if existing_chunks:
+            print(f"🔄 Found {len(existing_chunks)} partial chunks. Resuming...")
+            for chunk in existing_chunks:
+                try:
+                    # We interpret "processed" as tickers present in these chunks
+                    # Optimally we would just read the 'ticker' column unique values
+                    df_chunk = pd.read_parquet(chunk, columns=["ticker"])
+                    chunk_tickers = df_chunk["ticker"].unique()
+                    processed_tickers.update(chunk_tickers)
+                except:
+                    pass
+            print(f"⏩ Skipping {len(processed_tickers)} already processed tickers.")
 
-                batch_file = os.path.join(temp_chunk_dir, f"batch_{batch_idx}_{int(time.time())}.parquet")
-                df_batch.to_parquet(batch_file, index=False)
-                print(f"      💾 Saved batch: {len(df_batch)} records")
-            else:
-                print("      ⚠️ No data in this batch.")
-
-    # 4. Final Merge (Master + All Chunks)
-    print(f"🔗 Merging master and chunks for {data_type}...")
-    all_chunks = [os.path.join(temp_chunk_dir, f) for f in os.listdir(temp_chunk_dir) if f.endswith(".parquet")]
-    
-    if not all_chunks and df_master.empty:
-        print("⚠️ No data available to save.")
-        return
-
-    dfs_to_concat = [df_master] if not df_master.empty else []
-    
-    for chunk in all_chunks:
-        try:
-            dfs_to_concat.append(pd.read_parquet(chunk))
-        except Exception as e:
-            print(f"⚠️ Failed to read chunk {chunk}: {e}")
+        # Filter out processed tickers
+        tickers_to_process = [t for t in tickers if t not in processed_tickers]
+        
+        if not tickers_to_process:
+            print("✅ All tickers already processed in chunks. Proceeding to merge.")
+        else:
+            # 3. Batch Processing
+            batch_size = 500
+            total_batches = (len(tickers_to_process) // batch_size) + 1
             
-    if not dfs_to_concat:
-        print("⚠️ No valid data frames to merge.")
-        return
+            print(f"🔄 Updating {len(tickers_to_process)} tickers for {data_type} (Workers: {max_workers})...")
+            print(f"📦 Batch Processing: {total_batches} batches of ~{batch_size} tickers.")
+
+            for batch_idx in range(total_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = start_idx + batch_size
+                batch_tickers = tickers_to_process[start_idx:end_idx]
+                
+                if not batch_tickers: continue
+                
+                print(f"   [{data_type}] 🚀 Batch {batch_idx + 1}/{total_batches} ({len(batch_tickers)} tickers)...")
+                
+                new_rows = []
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(process_ticker_range_data, t, config, last_update_map): t for t in batch_tickers}
+                    
+                    for future in as_completed(futures):
+                        res = future.result()
+                        if res:
+                            new_rows.extend(res)
+
+                # Save Batch
+                if new_rows:
+                    df_batch = pd.DataFrame(new_rows)
+                    df_batch.columns = [c.lower() for c in df_batch.columns]
+                    
+                    # Deduplicate columns (e.g. Symbol vs symbol)
+                    df_batch = df_batch.loc[:, ~df_batch.columns.duplicated()]
+                    
+                    # Pre-clean batch
+                    if "ngay" in df_batch.columns: df_batch = df_batch.rename(columns={"ngay": "date"})
+                    if "date" in df_batch.columns: df_batch["date"] = pd.to_datetime(df_batch["date"], dayfirst=True, errors='coerce')
+                    df_batch = clean_dataframe_dates(df_batch)
+                    
+                    rename_map = {"symbol": "ticker", "giatrirong": "net_value", "khoiluongrong": "net_volume", "nguoithuchien": "executor"}
+                    df_batch = df_batch.rename(columns=rename_map)
+
+                    batch_file = os.path.join(temp_chunk_dir, f"batch_{batch_idx}_{int(time.time())}.parquet")
+                    df_batch.to_parquet(batch_file, index=False)
+                    print(f"      💾 Saved batch: {len(df_batch)} records")
+                else:
+                    print("      ⚠️ No data in this batch.")
+
+        # 4. Final Merge (Master + All Chunks)
+        print(f"🔗 Merging master and chunks for {data_type}...")
+        all_chunks = [os.path.join(temp_chunk_dir, f) for f in os.listdir(temp_chunk_dir) if f.endswith(".parquet")]
         
-    df_final = pd.concat(dfs_to_concat, ignore_index=True)
-    
-    # Ensure final date column is datetime
-    if "date" in df_final.columns:
-        df_final["date"] = pd.to_datetime(df_final["date"], errors='coerce')
-    
-    # 5. Final Cleanup
-    if "date" in df_final.columns and "ticker" in df_final.columns:
-        df_final = df_final.drop_duplicates()
-    
-    # Determine new filename
-    max_date = datetime.now()
-    if "date" in df_final.columns and not df_final.dropna(subset=["date"]).empty:
-        max_date = df_final["date"].max()
+        if not all_chunks and df_master.empty:
+            print("⚠️ No data available to save.")
+            return
+
+        dfs_to_concat = [df_master] if not df_master.empty else []
         
-    new_filename = f"{prefix}_{max_date.strftime('%d%m%y')}.parquet"
-    
-    if local_mode:
-        new_path = os.path.join(folder, new_filename)
-        df_final.to_parquet(new_path, index=False)
-        print(f"💾 Updated master saved: {new_path}")
-        
-        # Cleanup old local file
-        if latest_file_path and latest_file_path != new_path:
+        for chunk in all_chunks:
             try:
-                os.remove(latest_file_path)
-                print(f"🗑️ Removed old: {os.path.basename(latest_file_path)}")
-            except: pass
-    else:
-        temp_path = f"temp_{new_filename}"
-        r2_key = f"{folder}{new_filename}"
-        df_final.to_parquet(temp_path, index=False)
-        upload_to_r2(temp_path, bucket, r2_key)
-        print(f"☁️ Uploaded: {r2_key}")
-        os.remove(temp_path)
+                dfs_to_concat.append(pd.read_parquet(chunk))
+            except Exception as e:
+                print(f"⚠️ Failed to read chunk {chunk}: {e}")
+                
+        if not dfs_to_concat:
+            print("⚠️ No valid data frames to merge.")
+            return
+            
+        df_final = pd.concat(dfs_to_concat, ignore_index=True)
         
-    # 6. Cleanup Chunks
-    print("🧹 Cleaning up temporary chunks...")
-    import shutil
-    shutil.rmtree(temp_chunk_dir)
-    print("✨ Cleanup done.")
+        # Ensure final date column is datetime
+        if "date" in df_final.columns:
+            df_final["date"] = pd.to_datetime(df_final["date"], errors='coerce')
+        
+        # 5. Final Cleanup
+        if "date" in df_final.columns and "ticker" in df_final.columns:
+            df_final = df_final.drop_duplicates()
+        
+        # Determine new filename
+        max_date = datetime.now()
+        if "date" in df_final.columns and not df_final.dropna(subset=["date"]).empty:
+            max_date = df_final["date"].max()
+            
+        new_filename = f"{prefix}_{max_date.strftime('%d%m%y')}.parquet"
+        
+        if local_mode:
+            new_path = os.path.join(folder, new_filename)
+            df_final.to_parquet(new_path, index=False)
+            print(f"💾 Updated master saved: {new_path}")
+            
+            # Cleanup old local file
+            if latest_file_path and latest_file_path != new_path:
+                try:
+                    os.remove(latest_file_path)
+                    print(f"🗑️ Removed old: {os.path.basename(latest_file_path)}")
+                except: pass
+        else:
+            temp_path = f"temp_{new_filename}"
+            r2_key = f"{folder}{new_filename}"
+            df_final.to_parquet(temp_path, index=False)
+            upload_to_r2(temp_path, bucket, r2_key)
+            print(f"☁️ Uploaded: {r2_key}")
+            os.remove(temp_path)
+            
+            # Cleanup old backups
+            print(f"🧹 Cleaning old backups for {data_type} in R2...")
+            clean_old_backups_r2(bucket, folder, keep=1)
+            
+    finally:
+        # 6. Cleanup Chunks
+        if os.path.exists(temp_chunk_dir):
+            print("🧹 Cleaning up temporary chunks...")
+            import shutil
+            shutil.rmtree(temp_chunk_dir)
+        print("✨ Cleanup done.")
 
 # =====================================================
 # 4️⃣ RUNNER

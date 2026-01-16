@@ -5,3 +5,6 @@ playwright
 beautifulsoup4
 requests
 python-dotenv
+vnstock
+aiohttp
+lxml
