@@ -457,10 +457,10 @@ def usd_vnd_black_market(
             upload_to_r2(csv_path, bucket, r2_key)
             print(f"☁️ Uploaded to R2: {r2_key}")
             
-            # Clean old backups (keep 1)
+            # Move old files to backup subfolder (keep 1 current)
             print("🧹 Cleaning old backups for usd_black_market in R2...")
             # Similarly, we clean the parent folder
-            clean_old_backups_r2(bucket, "cafef_data/usd_black_market/", keep=2)
+            backup_and_cleanup_r2(bucket, "cafef_data/usd_black_market/", keep=1)
     except Exception as e:
         print(f"⚠️ R2 upload/cleanup error: {e}")
 

@@ -316,11 +316,10 @@ def scrape_vcb_fx(
 
             upload_to_r2(out_csv, bucket, r2_key)
             print(f"☁️ Uploaded to R2: {r2_key}")
-            
-             # Clean old backups (keep 1)
+            from utils_r2 import backup_and_cleanup_r2
+            # Move old files to backup subfolder (keep 1 current)
             print("🧹 Cleaning old backups for vcb_fx_data in R2...")
-            # Similarly, we clean the parent folder
-            clean_old_backups_r2(bucket, "cafef_data/vcb_fx_data/", keep=2)
+            backup_and_cleanup_r2(bucket, "cafef_data/vcb_fx_data/", keep=1)
     except Exception as e:
         print(f"⚠️ R2 upload/cleanup error: {e}")
 
