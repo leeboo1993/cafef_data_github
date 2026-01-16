@@ -85,3 +85,80 @@ def cleanup_incomplete_uploads(bucket, age_days=1):
                 print(f"   -> Aborted.")
     except Exception as e:
         print(f"⚠️ Error cleaning uploads: {e}")
+
+def backup_and_cleanup_r2(bucket, folder, file_pattern="", keep=2):
+    """
+    Keeps the latest 'keep' files in the main folder, moves older files to {folder}_backup/ subfolder.
+    
+    Args:
+        bucket: R2 bucket name
+        folder: Main folder path (e.g., "cafef_data/deposit_rate/")
+        file_pattern: Optional pattern to match files (e.g., "deposit_rate_")
+        keep: Number of latest files to keep in main folder (default 2)
+    
+    Structure created:
+        cafef_data/deposit_rate/
+          ├── deposit_rate_260116.csv (latest)
+          ├── deposit_rate_260116.json (latest)
+          └── deposit_rate_backup/
+              ├── deposit_rate_260115.csv (old)
+              └── deposit_rate_260115.json (old)
+    """
+    s3 = r2_client()
+    
+    # Ensure folder ends with /
+    if not folder.endswith('/'):
+        folder += '/'
+    
+    # List all files in main folder (excluding backup subfolder)
+    all_files = list_r2_files(bucket, folder)
+    backup_folder = f"{folder}{folder.rstrip('/').split('/')[-1]}_backup/"
+    
+    # Filter out backup folder contents
+    main_files = [f for f in all_files if not f.startswith(backup_folder)]
+    
+    if not main_files:
+        return
+    
+    # Group by extension
+    by_ext = {}
+    for f in main_files:
+        ext = f.split('.')[-1] if '.' in f else 'no_ext'
+        if ext not in by_ext:
+            by_ext[ext] = []
+        by_ext[ext].append(f)
+    
+    # Process each extension group
+    for ext, files in by_ext.items():
+        # Sort by date suffix (YYMMDD) if available
+        dated_files = []
+        for f in files:
+            date_obj = extract_date_from_name(f)
+            if date_obj:
+                dated_files.append((f, date_obj))
+        
+        if not dated_files:
+            continue
+        
+        # Sort by date descending
+        dated_files.sort(key=lambda x: x[1], reverse=True)
+        
+        # Keep latest N files in main folder
+        files_to_backup = [f[0] for f in dated_files[keep:]]
+        
+        # Move old files to backup
+        for old_file in files_to_backup:
+            new_key = old_file.replace(folder, backup_folder, 1)
+            
+            try:
+                # Copy to backup location
+                s3.copy_object(
+                    Bucket=bucket,
+                    Copy Source={'Bucket': bucket, 'Key': old_file},
+                    Key=new_key
+                )
+                # Delete from main folder
+                s3.delete_object(Bucket=bucket, Key=old_file)
+                print(f"📦 Moved to backup: {os.path.basename(old_file)}")
+            except Exception as e:
+                print(f"⚠️ Error backing up {old_file}: {e}")
