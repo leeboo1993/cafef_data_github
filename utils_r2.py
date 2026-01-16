@@ -111,9 +111,14 @@ def ensure_folder_exists(bucket, folder):
         s3.put_object(Bucket=bucket, Key=f"{folder.rstrip('/')}/")
         print(f"📁 Created folder: {folder}")
 
-def clean_old_backups_r2(bucket, prefix, keep=2):
+def clean_old_backups_r2(bucket, prefix, pattern=None, keep=2):
     s3 = r2_client()
     files = list_r2_files(bucket, prefix)
+    
+    # Filter by pattern if provided
+    if pattern:
+        files = [f for f in files if pattern in os.path.basename(f)]
+        
     dated = sorted(
         [f for f in files if extract_date_from_name(f)],
         key=lambda x: extract_date_from_name(x),

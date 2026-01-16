@@ -268,7 +268,7 @@ def run_cafef_downloader(max_days_back=5, local_mode=False):
                 # Cleanup old backups on R2 if not local
                 if not local_mode:
                     print(f"🧹 Cleaning old backups for {data_type} in R2...")
-                    clean_old_backups_r2(bucket, config["r2_folder"], keep=2) # Keep last 1 file
+                    clean_old_backups_r2(bucket, config["r2_folder"], pattern=config["file_pattern"], keep=2) # Keep last 2 files
 
     finally:
         # Cleanup temp dir
