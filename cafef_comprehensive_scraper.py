@@ -427,8 +427,10 @@ def update_range_dataset(data_type, tickers, local_mode=False, max_workers=10):
             os.remove(temp_path)
             
             # Cleanup old backups
-            print(f"🧹 Cleaning old backups for {data_type} in R2...")
-            clean_old_backups_r2(bucket, folder, keep=2)
+            # DISABLED: This was deleting valid data files because they weren't from today
+            # TODO: Re-enable after scraper successfully updates ALL files to current date
+            # print(f"🧹 Cleaning old backups for {data_type} in R2...")
+            # clean_old_backups_r2(bucket, folder, keep=2)
             
     finally:
         # 6. Cleanup Chunks
