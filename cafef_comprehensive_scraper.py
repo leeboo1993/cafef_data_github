@@ -34,7 +34,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import R2 utils conditionally or mock
 try:
-    from utils_r2 import upload_to_r2, download_from_r2, list_r2_files, ensure_folder_exists, clean_old_backups_r2
+    from utils_r2 import upload_to_r2, download_from_r2, list_r2_files, ensure_folder_exists, clean_old_backups_r2, r2_client
 except ImportError:
     # Mocks for when utils_r2 is missing entirely (unlikely but safe)
     def upload_to_r2(*args): pass
