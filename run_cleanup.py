@@ -37,6 +37,7 @@ print("\n🧹 Checking for legacy '_backup' folders to remove...")
 LEGACY_FOLDERS = [
     "cafef_data/deposit_rate_backup/",
     "cafef_data/gold_price_backup/",
+    "cafef_data/cafef_data_backup/",
     "cafef_data/vietnamnet_interest_rate_backup/",
     "cafef_data/stock_trading_account_backup/",
     "cafef_data/usd_black_market_backup/",
