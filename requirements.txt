@@ -1,10 +1,9 @@
 pandas
-pandas
+pyarrow
 boto3
 playwright
 httpx
 beautifulsoup4
-autifulsoup4
 requests
 python-dotenv
 vnstock
