@@ -141,7 +141,20 @@ jobs:
           python trading_account.py
 
       # --------------------------------------------------------
-      # 1️⃣1️⃣ Run Comprehensive Scraper (Prop, Insider, Orders, Ticks)
+      # 1️⃣1️⃣ Run Interbank Rate Scraper
+      # --------------------------------------------------------
+      - name: 🏦 Run Interbank Rate scraper
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running Interbank Rate scraper..."
+          python on_rate_scrape.py
+
+      # --------------------------------------------------------
+      # 1️⃣2️⃣ Run Comprehensive Scraper (Prop, Insider, Orders, Ticks)
       # --------------------------------------------------------
       - name: 🕵️ Run Comprehensive Scraper
         env:
@@ -178,6 +191,7 @@ jobs:
           echo "  - Stock prices      → cafef_data/"
           echo "  - Gold prices       → cafef_data/"
           echo "  - Deposit rate      → cafef_data/"
-          echo "  - VCB FX data       → cafef_data/ + R2"
-          echo "  - USD Black Market  → cafef_data/ + R2"
-          echo "  - Trading Account   → cafef_data/ + R2"
+          echo "  - VCB FX data       → cafef_data/"
+          echo "  - USD Black Market  → cafef_data/"
+          echo "  - Trading Account   → cafef_data/"
+          echo "  - Interbank Rate    → cafef_data/"
