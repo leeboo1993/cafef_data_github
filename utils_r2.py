@@ -15,7 +15,8 @@ def r2_client():
 def extract_date_from_name(name):
     """Extract date from filenames with _DDMMYY or _YYMMDD patterns."""
     # Try DDMMYY pattern first (e.g., all_insider_trading_120126.parquet)
-    m = re.search(r"_(\d{6})\.parquet$", name)
+    # Try DDMMYY pattern first (e.g., all_insider_trading_120126.parquet)
+    m = re.search(r"_(\d{6})\.[^.]+$", name)
     if m:
         date_str = m.group(1)
         # Try DDMMYY format first

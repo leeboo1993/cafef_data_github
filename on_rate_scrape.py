@@ -57,32 +57,48 @@ VIETNAMESE_TENORS = {
 
 
 def parse_vietnamese_float(value: str) -> Optional[float]:
-    """Parse Vietnamese number format, handling asterisks and parentheses"""
+    """
+    Parse Vietnamese number format robustly.
+    Handles asterisks, parentheses, and extra text like "(*) Tham chiếu..."
+    Extracts the first valid numeric token.
+    """
     if not value or value.strip() in ['', '-', 'N/A', 'NA']:
         return None
     
-    try:
-        # Remove asterisks, parentheses, and other markers
-        cleaned = value.strip().replace('%', '').strip()
-        # Remove asterisks and anything in parentheses (e.g., "6,45 (*)" -> "6,45")
-        cleaned = re.sub(r'\*+', '', cleaned)  # Remove asterisks
-        cleaned = re.sub(r'\([^)]*\)', '', cleaned)  # Remove parentheses and content
-        cleaned = cleaned.strip()
+    # 1. Basic cleanup
+    text = value.strip().replace('%', ' ') # Replace % with space to separate
+    
+    # 2. Extract first token that might be a number
+    # Split by spaces/newlines
+    tokens = text.split()
+    
+    for token in tokens:
+        # Clean token of common junk (*, (), etc)
+        token_clean = re.sub(r'[*()]+', '', token).strip()
         
-        if not cleaned:
-            return None
+        if not token_clean:
+            continue
             
-        # Handle Vietnamese number format (comma as decimal separator)
-        if ',' in cleaned:
-            cleaned = cleaned.replace('.', '')  # Remove thousand separators
-            cleaned = cleaned.replace(',', '.')  # Convert decimal separator
-            return float(cleaned)
-        # Handle dot as thousand separator
-        if re.fullmatch(r'\d{1,3}(?:\.\d{3})+', cleaned):
-            cleaned = cleaned.replace('.', '')
-        return float(cleaned)
-    except (ValueError, AttributeError):
-        return None
+        # Try to parse this token
+        try:
+            # Handle Vietnamese format: 6,45 or 1.000,00
+            val_str = token_clean
+            
+            if ',' in val_str:
+                val_str = val_str.replace('.', '').replace(',', '.')
+            elif val_str.count('.') > 1:
+                # 1.000.000 case
+                val_str = val_str.replace('.', '')
+            # If it's just 6.45, float conversion handles it.
+            # If it's 1.234 (thousand), we need to be careful, but SBV usually uses comma for decimal.
+            # Assumption: SBV uses comma for decimal (6,45) OR dot for decimal (6.45) but never dot for thousands in rates (rates < 100).
+                
+            val = float(val_str)
+            return val
+        except ValueError:
+            continue
+            
+    return None
 
 
 def normalize_tenor(text: str) -> str:
