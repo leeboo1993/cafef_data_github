@@ -471,11 +471,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Default to T-5 if no args
+    # Default to T-90 if no args (Fill gaps, smart update skips existing)
     if args.start is None and args.end is None:
-        args.start = (datetime.date.today() - datetime.timedelta(days=5)).strftime("%Y-%m-%d")
+        args.start = (datetime.date.today() - datetime.timedelta(days=90)).strftime("%Y-%m-%d")
         args.update = True
-        print(f"🚀 GitHub Actions mode: T-5 to today")
+        print(f"🚀 GitHub Actions mode: T-90 to today (Backfill enabled)")
 
     usd_vnd_black_market(
         start_date=args.start,
