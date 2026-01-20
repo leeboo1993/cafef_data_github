@@ -257,7 +257,7 @@ def create_initial_file(initial_data_file: str = 'interbank_rates_complete.csv')
     
     # Load data
     df = pd.read_csv(initial_data_file)
-    latest = pd.to_datetime(df['date']).max().date()
+    latest = pd.to_datetime(df['date'], format='mixed', dayfirst=True).max().date()
     
     # Create filename with latest date
     filename = f"interbank_rate_{latest.strftime('%d%m%y')}.csv"
@@ -281,7 +281,7 @@ def update_file_with_new_data(csv_file: str, new_rates: Dict, new_date: date) ->
     """
     # Load existing data
     df = pd.read_csv(csv_file)
-    df['date'] = pd.to_datetime(df['date'])
+    df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=True)
     
     # Check if date already exists
     existing_row = df[df['date'] == pd.to_datetime(new_date)]
@@ -382,8 +382,8 @@ def check_status(csv_file: str):
     print(f"  File: {csv_file}")
     
     df = pd.read_csv(csv_file)
-    latest = pd.to_datetime(df['date']).max().date()
-    earliest = pd.to_datetime(df['date']).min().date()
+    latest = pd.to_datetime(df['date'], format='mixed', dayfirst=True).max().date()
+    earliest = pd.to_datetime(df['date'], format='mixed', dayfirst=True).min().date()
     
     print(f"  Total dates: {len(df)}")
     print(f"  Date range: {earliest} to {latest}")
