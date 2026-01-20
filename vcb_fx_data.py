@@ -55,10 +55,20 @@ async def scrape_one_day(page, d) -> List[List[str]]:
     ui_date = d.strftime("%d/%m/%Y")   # UI format
     csv_date = d.strftime("%Y-%m-%d")  # CSV format
 
+    # Wait for date picker to be truly ready
+    await page.wait_for_selector("#datePicker", state="visible", timeout=60000)
+    
+    # Force click to ensure focus and clear potential overlays
+    try:
+        await page.click("#datePicker", force=True, timeout=5000)
+    except:
+        pass
+
     await page.fill("#datePicker", "")
     await page.fill("#datePicker", ui_date)
     await page.keyboard.press("Enter")
-    await page.wait_for_timeout(1500)
+    # Increased wait for table reload
+    await page.wait_for_timeout(3000)
 
     rows = page.locator("table.table-responsive tbody tr")
     count = await rows.count()
@@ -159,7 +169,13 @@ async def _scrape_vcb_fx(
         for attempt in range(5):
             try:
                 print(f"→ Loading page attempt {attempt+1}/5")
-                await page.goto(VCB_URL, wait_until="domcontentloaded", timeout=90000)
+                # Increased timeout to 120s and use commit to be safer than domcontentloaded
+                await page.goto(VCB_URL, wait_until="domcontentloaded", timeout=120000)
+                # Wait for main container to ensure render
+                try:
+                    await page.wait_for_selector("#datePicker", timeout=20000)
+                except:
+                    pass # Will retry or fail in loop later
                 break
             except Exception as e:
                 print(f"Retry goto… {attempt+1}/5: {e}")
@@ -170,12 +186,21 @@ async def _scrape_vcb_fx(
         await page.wait_for_timeout(2000)
 
         # Cookie popup
+        # Cookie popup - aggressive handling
         try:
+            # Wait briefly for popup
+            try:
+                await page.wait_for_selector("button:has-text('Chấp nhận')", timeout=10000)
+            except:
+                pass
+                
             btn = page.locator("button:has-text('Chấp nhận')")
             if await btn.count() > 0:
-                await btn.first.click()
-        except:
-            pass
+                await btn.first.click(force=True)
+                print("✅ Dismissed cookie banner")
+                await page.wait_for_timeout(1000) # Wait for animation
+        except Exception as e:
+            print(f"ℹ️ Cookie banner handling note: {e}")
 
         # Write header
         if first_write:
