@@ -307,7 +307,7 @@ def update_file_with_new_data(csv_file: str, new_rates: Dict, new_date: date) ->
         # Date doesn't exist - add new row
         if new_rates:
             print(f"  ➕ Adding new date with data: {new_date}")
-            new_row = {'date': new_date}
+            new_row = {'date': pd.Timestamp(new_date)}
             for tenor, data in new_rates.items():
                 new_row[tenor] = data['rate']
                 new_row[f"{tenor}_vol_bn"] = data.get('volume', '')
@@ -316,7 +316,7 @@ def update_file_with_new_data(csv_file: str, new_rates: Dict, new_date: date) ->
         else:
             # No data available - add blank placeholder
             print(f"  📝 Adding blank placeholder for: {new_date}")
-            new_row = {'date': new_date}
+            new_row = {'date': pd.Timestamp(new_date)}
             # All tenor columns will be empty
         
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
