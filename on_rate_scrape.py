@@ -57,16 +57,27 @@ VIETNAMESE_TENORS = {
 
 
 def parse_vietnamese_float(value: str) -> Optional[float]:
-    """Parse Vietnamese number format"""
+    """Parse Vietnamese number format, handling asterisks and parentheses"""
     if not value or value.strip() in ['', '-', 'N/A', 'NA']:
         return None
     
     try:
+        # Remove asterisks, parentheses, and other markers
         cleaned = value.strip().replace('%', '').strip()
+        # Remove asterisks and anything in parentheses (e.g., "6,45 (*)" -> "6,45")
+        cleaned = re.sub(r'\*+', '', cleaned)  # Remove asterisks
+        cleaned = re.sub(r'\([^)]*\)', '', cleaned)  # Remove parentheses and content
+        cleaned = cleaned.strip()
+        
+        if not cleaned:
+            return None
+            
+        # Handle Vietnamese number format (comma as decimal separator)
         if ',' in cleaned:
-            cleaned = cleaned.replace('.', '')
-            cleaned = cleaned.replace(',', '.')
+            cleaned = cleaned.replace('.', '')  # Remove thousand separators
+            cleaned = cleaned.replace(',', '.')  # Convert decimal separator
             return float(cleaned)
+        # Handle dot as thousand separator
         if re.fullmatch(r'\d{1,3}(?:\.\d{3})+', cleaned):
             cleaned = cleaned.replace('.', '')
         return float(cleaned)
@@ -155,7 +166,7 @@ def fetch_latest_interbank_rates() -> Dict[str, Dict]:
             volume_text = tds[2].get_text(" ", strip=True) if len(tds) > 2 else None
             
             tenor_label = normalize_tenor(tenor_text)
-            rate = parse_vietnamese_float(rate_text.replace('*', ''))
+            rate = parse_vietnamese_float(rate_text)  # Now handles asterisks and parentheses
             volume = parse_vietnamese_float(volume_text) if volume_text else None
             
             if tenor_label and rate is not None:
