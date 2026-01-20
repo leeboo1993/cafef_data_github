@@ -313,7 +313,7 @@ def update_file_with_new_data(csv_file: str, new_rates: Dict, new_date: date) ->
         else:
             # Date exists and has data - no update needed
             print(f"  ⏭️  Date {new_date} already has data - skipping")
-            return csv_file
+            # 1return csv_file
     else:
         # Date doesn't exist - add new row
         if new_rates:
