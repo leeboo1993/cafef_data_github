@@ -240,8 +240,8 @@ def get_file_latest_date(csv_file: str) -> Optional[date]:
         if df.empty or 'date' not in df.columns:
             return None
         
-        # Get latest date
-        latest = pd.to_datetime(df['date']).max()
+        # Get latest date - handle DD/MM/YYYY format
+        latest = pd.to_datetime(df['date'], format='mixed', dayfirst=True).max()
         return latest.date()
     except Exception as e:
         print(f"  ⚠️  Error reading file: {e}")
