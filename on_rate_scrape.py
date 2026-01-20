@@ -120,6 +120,63 @@ def normalize_tenor(text: str) -> str:
     return ""
 
 
+def parse_volume(value: str) -> Optional[float]:
+    """
+    Parse Volume with Flexible Separator Logic:
+    - Splits by both DOT (.) and COMMA (,)
+    - Heuristic: If last token has length 3, it's likely part of integer (thousands). 
+      If length 1-2, it's decimal.
+    - Examples:
+      "567.855,0" -> 567855.0
+      "567,855,0" -> 567855.0
+      "1.000"     -> 1000.0
+    """
+    if not value or value.strip() in ['', '-', 'N/A', 'NA']:
+        return None
+    
+    value = value.strip()
+    
+    # Extract first token (handle annotations like "(*) 123...")
+    tokens = value.split()
+    for token in tokens:
+        token_clean = re.sub(r'[*()]+', '', token).strip()
+        if not token_clean: continue
+        
+        try:
+            # Flexible separator parsing
+            # Split by non-digit characters
+            parts = re.split(r'[.,]', token_clean)
+            parts = [p for p in parts if p] # Remove empty strings
+            
+            if not parts:
+                continue
+                
+            if len(parts) == 1:
+                return float(parts[0])
+            
+            last_part = parts[-1]
+            
+            # Logic: If last part is 3 digits, assume it's thousands block (Integer)
+            # Unless there's only 2 parts and first is small? No, 1.000 is 1000.
+            # 6,45 -> parts=["6", "45"]. last len=2 -> decimal.
+            # 567.855,0 -> parts=["567", "855", "0"]. last len=1 -> decimal.
+            
+            if len(last_part) == 3:
+                # Assume all parts are integer blocks
+                full_num_str = "".join(parts)
+                return float(full_num_str)
+            else:
+                # Assume last part is decimal
+                int_part = "".join(parts[:-1])
+                dec_part = last_part
+                return float(f"{int_part}.{dec_part}")
+                
+        except ValueError:
+            continue
+            
+    return None
+
+
 def fetch_latest_interbank_rates() -> Dict[str, Dict]:
     """Fetch latest interbank rates and volumes from SBV"""
     print(f"  Fetching from SBV...")
@@ -179,11 +236,16 @@ def fetch_latest_interbank_rates() -> Dict[str, Dict]:
             
             tenor_text = tds[0].get_text(" ", strip=True)
             rate_text = tds[1].get_text(" ", strip=True)
-            volume_text = tds[2].get_text(" ", strip=True) if len(tds) > 2 else None
+            volume_text = tds[2].get_text(" ", strip=True) if len(tds) > 2 else ""
+            
+            # Debug log to see exactly what we get
+            print(f"    Raw Scrape: Tenor='{tenor_text}' Rate='{rate_text}' Vol='{volume_text}'")
             
             tenor_label = normalize_tenor(tenor_text)
-            rate = parse_vietnamese_float(rate_text)  # Now handles asterisks and parentheses
-            volume = parse_vietnamese_float(volume_text) if volume_text else None
+            
+            # Use specific parsers
+            rate = parse_vietnamese_float(rate_text)
+            volume = parse_volume(volume_text)
             
             if tenor_label and rate is not None:
                 rates[tenor_label] = {
