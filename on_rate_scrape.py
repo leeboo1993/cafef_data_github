@@ -399,6 +399,7 @@ def check_status(csv_file: str):
     print(f"  Total dates: {len(df)}")
     print(f"  Date range: {earliest} to {latest}")
     print(f"  Latest date: {latest}")
+    print(f"  Latest Data rows:\n{df[df['date'] == str(latest)]}")
     print(f"  Days old: {(date.today() - latest).days}")
     
     # Check coverage
