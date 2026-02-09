@@ -167,10 +167,73 @@ jobs:
           # Run with a 5 business day lookback to ensure gapless data
           python cafef_comprehensive_scraper.py --lookback-days 5 --workers 20
 
-
+      # --------------------------------------------------------
+      # 1️⃣3️⃣ Run Global Market Scraper
+      # --------------------------------------------------------
+      - name: 🌐 Run Global Market Scraper
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running Global Market Scraper..."
+          python global_market_scraper.py
 
       # --------------------------------------------------------
-      # 1️⃣2️⃣ Cleanup Stuck Uploads
+      # 1️⃣4️⃣ Run ETF Flow Scraper
+      # --------------------------------------------------------
+      - name: 📈 Run ETF Flow Scraper
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running ETF Flow Scraper..."
+          python etf_flow_scraper.py
+
+      # --------------------------------------------------------
+      # 1️⃣5️⃣ Run Investor Flow Scraper
+      # --------------------------------------------------------
+      - name: 💼 Run Investor Flow Scraper
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running Investor Flow Scraper..."
+          python investor_flow_scraper.py
+
+      # --------------------------------------------------------
+      # 1️⃣6️⃣ Run Crypto Scraper
+      # --------------------------------------------------------
+      - name: ₿ Run Crypto Scraper
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running Crypto Scraper..."
+          python crypto_scraper.py
+
+      # --------------------------------------------------------
+      # 1️⃣7️⃣ Run Bond Market Scraper
+      # --------------------------------------------------------
+      - name: 📉 Run Bond Market Scraper
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running Bond Market Scraper..."
+          python bond_market_scraper.py
+
+      # --------------------------------------------------------
+      # 1️⃣8️⃣ Cleanup Stuck Uploads
       # --------------------------------------------------------
       - name: 🧹 Cleanup Stuck Multipart Uploads
         env:
@@ -183,15 +246,21 @@ jobs:
           python run_cleanup.py
 
       # --------------------------------------------------------
-      # 1️⃣3️⃣ Final confirmation log
+      # 1️⃣9️⃣ Final confirmation log
       # --------------------------------------------------------
       - name: ✅ Summary
         run: |
           echo "🎯 All data updated successfully and uploaded to R2:"
-          echo "  - Stock prices      → cafef_data/"
-          echo "  - Gold prices       → cafef_data/"
-          echo "  - Deposit rate      → cafef_data/"
-          echo "  - VCB FX data       → cafef_data/"
-          echo "  - USD Black Market  → cafef_data/"
-          echo "  - Trading Account   → cafef_data/"
-          echo "  - Interbank Rate    → cafef_data/"
+          echo "  - Stock prices       → cafef_data/"
+          echo "  - Gold prices        → cafef_data/"
+          echo "  - Deposit rate       → cafef_data/"
+          echo "  - VCB FX data        → cafef_data/"
+          echo "  - USD Black Market   → cafef_data/"
+          echo "  - Trading Account    → cafef_data/"
+          echo "  - Interbank Rate     → cafef_data/"
+          echo "  - Comprehensive      → cafef_data/"
+          echo "  - Global Markets     → cafef_data/global_markets/"
+          echo "  - ETF Flows          → cafef_data/etf_flows/"
+          echo "  - Investor Flows     → cafef_data/investor_flows/"
+          echo "  - Crypto             → cafef_data/alternative_assets/"
+          echo "  - Bond Market        → cafef_data/bond_market/"
