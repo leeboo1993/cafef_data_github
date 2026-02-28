@@ -50,8 +50,13 @@ def list_r2_files(bucket, prefix):
 
 def upload_to_r2(local_path, bucket, key):
     s3 = r2_client()
-    s3.upload_file(local_path, bucket, key)
-    print(f"☁️ Uploaded → s3://{bucket}/{key}")
+    try:
+        s3.upload_file(local_path, bucket, key)
+        print(f"☁️ Uploaded → s3://{bucket}/{key}")
+        return True
+    except Exception as e:
+        print(f"❌ Upload failed: {e}")
+        return False
 
 def backup_existing_file(bucket, key):
     """

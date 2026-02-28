@@ -174,3 +174,5 @@ cython_debug/
 .DS_Store
 .DS_Store
 .DS_Store
+
+dl_data_crawl/data/

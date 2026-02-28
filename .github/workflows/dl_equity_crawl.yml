@@ -1,0 +1,79 @@
+# ============================================================
+# ⏰ DL EQUITY DATA CRAWLER
+# ============================================================
+name: DL Equity Data Crawl
+
+# ============================================================
+# ⚙️ Schedule + Manual Run
+# ============================================================
+on:
+  schedule:
+    # Mon-Fri: every 30 min, 9:00 AM - 6:00 PM Vietnam (GMT+7) = 2:00-11:00 UTC
+    - cron: "*/30 2-11 * * 1-5"
+    # Sat-Sun: once at 10:00 PM Vietnam (GMT+7) = 15:00 UTC
+    - cron: "0 15 * * 0,6"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# ============================================================
+# 💻 MAIN JOB
+# ============================================================
+jobs:
+  dl-equity-crawl:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # --------------------------------------------------------
+      # 1️⃣ Checkout code
+      # --------------------------------------------------------
+      - name: 🧭 Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # 2️⃣ Setup Python 3.11
+      # --------------------------------------------------------
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # --------------------------------------------------------
+      # 3️⃣ Install dependencies
+      # --------------------------------------------------------
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests boto3
+
+      # --------------------------------------------------------
+      # 4️⃣ Run DL Equity Data Crawler (incremental)
+      # --------------------------------------------------------
+      - name: 📊 Run DL Equity Data Crawler
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "🚀 Running DL Equity Data Crawler (incremental + fundamentals)..."
+          cd dl_data_crawl
+          python3 crawl.py crawl
+          python3 crawl.py export --format json
+          echo "☁️ Uploading DL Equity JSON exports to R2..."
+          cd ..
+          python3 -c "import os; from utils_r2 import upload_to_r2; bucket=os.getenv('R2_BUCKET'); jd='dl_data_crawl/data/json'; [upload_to_r2(os.path.join(jd,f),bucket,f'cafef_data/dl_equity/{f}') for f in os.listdir(jd) if f.endswith('.json')]"
+
+      # --------------------------------------------------------
+      # 5️⃣ Summary
+      # --------------------------------------------------------
+      - name: ✅ Summary
+        run: |
+          echo "🎯 DL Equity data updated and uploaded to R2:"
+          echo "  - Market data        → cafef_data/dl_equity/market.json"
+          echo "  - Economics data     → cafef_data/dl_equity/economics.json"
+          echo "  - Research data      → cafef_data/dl_equity/research.json"
+          echo "  - Fundamentals data  → cafef_data/dl_equity/fundamentals.json"
