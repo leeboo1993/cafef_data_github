@@ -14,16 +14,28 @@ def r2_client():
 
 def extract_date_from_name(name):
     """Extract date from filenames with _DDMMYY or _YYMMDD patterns."""
-    # Try DDMMYY pattern first (e.g., all_insider_trading_120126.parquet)
-    # Try DDMMYY pattern first (e.g., all_insider_trading_120126.parquet)
     m = re.search(r"_(\d{6})\.[^.]+$", name)
     if m:
         date_str = m.group(1)
-        # Try DDMMYY format first
+        
+        # Check if it starts with the current/recent year (e.g. "25", "26") -> highly likely YYMMDD
+        if date_str.startswith(('24', '25', '26', '27')):
+            try:
+                return datetime.strptime(date_str, "%y%m%d")
+            except:
+                pass
+                
+        # Check if it ends with the current/recent year -> highly likely DDMMYY
+        if date_str.endswith(('24', '25', '26', '27')):
+            try:
+                return datetime.strptime(date_str, "%d%m%y")
+            except:
+                pass
+                
+        # Fallbacks if none of the explicit rules matched
         try:
             return datetime.strptime(date_str, "%d%m%y")
         except:
-            # Try YYMMDD format as fallback
             try:
                 return datetime.strptime(date_str, "%y%m%d")
             except:
