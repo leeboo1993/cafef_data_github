@@ -136,6 +136,8 @@ CREATE TABLE IF NOT EXISTS macro_research (
     source  TEXT,
     title   TEXT,
     summary TEXT,
+    body    TEXT,
+    author  TEXT,
     date    TEXT
 );
 
@@ -230,9 +232,17 @@ def get_db() -> sqlite3.Connection:
 
 
 def init_db():
-    """Create all tables."""
+    """Create all tables (and run any pending migrations)."""
     conn = get_db()
     conn.executescript(SCHEMA_SQL)
+    # Migration: add body/author columns to macro_research if they don't exist yet
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(macro_research)").fetchall()}
+    if "body" not in existing_cols:
+        conn.execute("ALTER TABLE macro_research ADD COLUMN body TEXT")
+        print("  🔧 Migration: added 'body' column to macro_research")
+    if "author" not in existing_cols:
+        conn.execute("ALTER TABLE macro_research ADD COLUMN author TEXT")
+        print("  🔧 Migration: added 'author' column to macro_research")
     conn.commit()
     conn.close()
     print(f"✅ Database initialized: {DB_PATH}")
@@ -565,7 +575,7 @@ def ingest_ticker_news(session: requests.Session, conn: sqlite3.Connection, full
 
 
 def ingest_macro_research(session: requests.Session, conn: sqlite3.Connection, full: bool):
-    """Ingest macro research articles with dedup by URL."""
+    """Ingest macro research articles with dedup by URL, including full body text."""
     endpoint = "macro_research"
     print(f"  📥 macro_research...", end=" ", flush=True)
 
@@ -573,21 +583,59 @@ def ingest_macro_research(session: requests.Session, conn: sqlite3.Connection, f
     if not data or "articles" not in data:
         print("❌"); return
 
+    articles = data["articles"]
     inserted = 0
-    for a in data["articles"]:
+    body_fetched = 0
+
+    for a in articles:
+        article_id = a.get("id")
+        # Check if this article already exists with body content
+        existing = conn.execute(
+            "SELECT body FROM macro_research WHERE url = ?", (a.get("url"),)
+        ).fetchone() if a.get("url") else None
+
+        # Also check by id if url is null
+        existing_by_id = None
+        if not a.get("url") and article_id:
+            existing_by_id = conn.execute(
+                "SELECT body FROM macro_research WHERE url = ?", (str(article_id),)
+            ).fetchone()
+
+        already_has_body = (existing and existing[0]) or (existing_by_id and existing_by_id[0])
+
+        # Fetch full content from detail endpoint
+        body = None
+        author = None
+        if article_id and (not already_has_body or full):
+            detail = fetch_api(session, f"/api/macro-research/{article_id}")
+            if detail:
+                body = detail.get("content")
+                author = detail.get("author")
+                if body:
+                    body_fetched += 1
+            time.sleep(0.1)  # Be respectful
+
+        # Use the article id as the url key if url is null
+        url_key = a.get("url") or str(article_id)
+
         try:
             conn.execute(
-                "INSERT OR IGNORE INTO macro_research (url, source, title, summary, date) VALUES (?,?,?,?,?)",
-                (a.get("url"), a.get("source"), a.get("title"), a.get("summary"), a.get("date"))
+                """INSERT INTO macro_research (url, source, title, summary, body, author, date)
+                   VALUES (?,?,?,?,?,?,?)
+                   ON CONFLICT(url) DO UPDATE SET
+                     body   = COALESCE(excluded.body, macro_research.body),
+                     author = COALESCE(excluded.author, macro_research.author)""",
+                (url_key, a.get("source"), a.get("title"), a.get("summary"),
+                 body, author, a.get("date"))
             )
             inserted += 1
         except sqlite3.IntegrityError:
             pass
 
-    latest = data["articles"][0]["date"] if data["articles"] else None
-    update_metadata(conn, endpoint, latest, len(data["articles"]))
+    latest = articles[0]["date"] if articles else None
+    update_metadata(conn, endpoint, latest, len(articles))
     conn.commit()
-    print(f"✅ {len(data['articles'])} fetched, {inserted} new")
+    print(f"✅ {len(articles)} fetched, {inserted} upserted, {body_fetched} with full body")
 
 
 def ingest_weekly_calls(session: requests.Session, conn: sqlite3.Connection, full: bool):
