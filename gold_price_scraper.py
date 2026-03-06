@@ -1,337 +1,196 @@
-# ======================================================
-# gold_price_scraper.py  —  JSON version (local + GitHub Actions)
-# ======================================================
-
-import os, re, json
+import os
+import json
 import requests
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+from utils_r2 import upload_to_r2, download_from_r2, list_r2_files
 
-# Try dotenv for local runs; safe no-op in GitHub Actions
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except Exception:
-    pass
+# Load environment variables
+load_dotenv()
 
-from utils_r2 import (
-    upload_to_r2,
-    download_from_r2,
-    list_r2_files,
-    r2_client,
-)
-
-# ======================================================
-# CONFIGURATION
-# ======================================================
-HEADERS = {"User-Agent": "Mozilla/5.0"}
-SAVE_DIR = Path.cwd() / "gold_price"
+BUCKET = os.getenv("R2_BUCKET", "broker-data")
+SAVE_DIR = Path.cwd() / "precious_metals"
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
-BUCKET = os.getenv("R2_BUCKET")
+URL_GOLD_HIST = "https://cafef.vn/du-lieu/Ajax/ajaxgoldpricehistory.ashx?index=all"
+URL_GOLD_RING_DOJI = "https://giavang.doji.vn/api/giavang/?api_key=258fbd2a72ce8481089d88c678e9fe4f"
+URL_SILVER_PAGE = "https://cafef.vn/du-lieu/gia-bac-hom-nay/trong-nuoc.chn"
 
-# Folder structure on R2
-PREFIX_MAIN = "cafef_data/"
-
-print("🪙 Fetching SJC gold data (JSON format)...")
-
-# ======================================================
-# 1️⃣ FETCH GOLD DATA FROM CAFEF
-# ======================================================
 def fetch_gold_data():
-    urls = {
-        "bar": "https://cafef.vn/du-lieu/Ajax/ajaxgoldpricehistory.ashx?index=all",
-        "ring": "https://cafef.vn/du-lieu/Ajax/AjaxGoldPriceRing.ashx?time=all&zone=11"
-    }
-
-    def fetch(url):
-        r = requests.get(url, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        return r.json().get("Data", {}).get("goldPriceWorldHistories", [])
-
-    # --- Download JSON ---
-    df_bar = pd.DataFrame(fetch(urls["bar"]))
-    df_ring = pd.DataFrame(fetch(urls["ring"]))
-
-    # --- Identify correct timestamp field ---
-    date_col_bar = "createdAt" if "createdAt" in df_bar.columns else "lastUpdated"
-    date_col_ring = "createdAt" if "createdAt" in df_ring.columns else "lastUpdated"
-
-    # --- Parse to datetime robustly ---
-    df_bar["date"] = pd.to_datetime(df_bar[date_col_bar], errors="coerce", format="mixed", utc=True)
-    df_ring["date"] = pd.to_datetime(df_ring[date_col_ring], errors="coerce", format="mixed", utc=True)
-
-    # --- Drop invalid dates ---
-    df_bar = df_bar.dropna(subset=["date"])
-    df_ring = df_ring.dropna(subset=["date"])
-
-    # --- Rename columns for clarity ---
-    df_bar = df_bar.rename(columns={"buyPrice": "bar_buy", "sellPrice": "bar_sell"})
-    df_ring = df_ring.rename(columns={"buyPrice": "ring_buy", "sellPrice": "ring_sell"})
+    """Fetch gold data using stable AJAX endpoints."""
+    print("💹 Fetching Gold data from AJAX...")
+    results = {"date": datetime.now().strftime("%Y-%m-%d"), "bar_buy": None, "bar_sell": None, "ring_buy": None, "ring_sell": None}
     
-    # --- Normalize units: Convert ring prices from thousand VND to million VND ---
-    df_ring["ring_buy"] = df_ring["ring_buy"] / 1000
-    df_ring["ring_sell"] = df_ring["ring_sell"] / 1000
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
     
-    # --- Convert to date only (drop time) to avoid duplicates ---
-    df_bar["date"] = df_bar["date"].dt.date
-    df_ring["date"] = df_ring["date"].dt.date
+    # 1. SJC Bar Price (from history API)
+    try:
+        resp = requests.get(URL_GOLD_HIST, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            content = resp.json()
+            hist = content.get("Data", {}).get("goldPriceWorldHistories", [])
+            if hist:
+                latest = hist[-1]
+                # Price is in million VND per tael (e.g., 180.8)
+                results["bar_buy"] = latest.get("buyPrice")
+                results["bar_sell"] = latest.get("sellPrice")
+    except Exception as e:
+        print(f"  ⚠️ Error fetching gold history: {e}")
+
+    # 2. Ring Price (from DOJI API)
+    try:
+        # Disable cert validation for DOJI API due to self-signed/expired certs on their internal endpoint
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        resp = requests.get(URL_GOLD_RING_DOJI, headers=headers, timeout=10, verify=False)
+        if resp.status_code == 200:
+            xml_text = resp.content.decode('utf-8-sig')
+            root = ET.fromstring(xml_text)
+            for row in root.findall(".//Row"):
+                if row.attrib.get('Key') == 'nhanhung1chi' or "Nh" in row.attrib.get('Name', '') and "ng" in row.attrib.get('Name', ''):
+                    buy_str = row.attrib.get('Buy', '').replace(',', '')
+                    sell_str = row.attrib.get('Sell', '').replace(',', '')
+                    if buy_str and sell_str:
+                        buy = float(buy_str)
+                        sell = float(sell_str)
+                        # Value from DOJI is in 1000 VND / chi (e.g. 18380). Multiply by 10 to get Tael, then divide by 1000 to get Millions (or just divide by 100).
+                        results["ring_buy"] = buy / 100
+                        results["ring_sell"] = sell / 100
+                    break
+    except Exception as e:
+        print(f"  ⚠️ Error fetching gold ring from DOJI: {e}")
+        
+    return results
+
+def fetch_silver_data():
+    """Fetch silver data by parsing the stable HTML structure."""
+    print(f"🥈 Fetching Silver data from HTML: {URL_SILVER_PAGE}")
+    results = {"date": datetime.now().strftime("%Y-%m-%d"), "silver_buy": None, "silver_sell": None, "all_sources": []}
     
-    # --- Aggregate by date (take the latest/last values for each date) ---
-    df_bar = df_bar.groupby("date")[["bar_buy", "bar_sell"]].last().reset_index()
-    df_ring = df_ring.groupby("date")[["ring_buy", "ring_sell"]].last().reset_index()
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        resp = requests.get(URL_SILVER_PAGE, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'lxml')
+            items = soup.select(".list_silver_price_item")
+            data = []
+            for item in items:
+                name_tag = item.select_one(".list_silver_price_name_type_name")
+                buy_tag = item.select_one(".list_silver_price_item_price_buy")
+                sell_tag = item.select_one(".list_silver_price_item_price_sell")
+                
+                if name_tag and buy_tag and sell_tag:
+                    name = name_tag.get_text(strip=True)
+                    buy = buy_tag.get_text(strip=True).replace(",", ".")
+                    sell = sell_tag.get_text(strip=True).replace(",", ".")
+                    try:
+                        data.append({
+                            "name": name,
+                            "buy": float(buy),
+                            "sell": float(sell)
+                        })
+                    except ValueError:
+                        continue
+            
+            if data:
+                # Latest record (usually the first one, or most common "Bạc miếng Phú Quý")
+                latest = next((d for d in data if "PHÚ QUÝ" in d["name"].upper() and "MIẾNG" in d["name"].upper()), data[0])
+                results["silver_buy"] = latest["buy"]
+                results["silver_sell"] = latest["sell"]
+                results["all_sources"] = data
+    except Exception as e:
+        print(f"  ⚠️ Error fetching silver: {e}")
+        
+    return results
 
-    # --- Merge ---
-    df = pd.merge(
-        df_bar[["date", "bar_buy", "bar_sell"]],
-        df_ring[["date", "ring_buy", "ring_sell"]],
-        on="date",
-        how="outer"
-    )
-
-    # --- Convert date back to datetime for consistency ---
-    df["date"] = pd.to_datetime(df["date"])
-    
-    # --- Sort by date ---
-    df = df.sort_values("date").reset_index(drop=True)
-
-    # --- Drop rows with no valid prices ---
-    df = df.dropna(subset=["bar_buy", "bar_sell", "ring_buy", "ring_sell"], how="all")
-
-    print(f"✅ Retrieved {len(df)} gold records (unique dates).")
-    return df
-
-
-# ======================================================
-# 2️⃣ LOAD EXISTING JSON DATA FROM R2
-# ======================================================
-def load_existing_json_data(bucket, prefix):
-    """Load existing gold price JSON from R2."""
-    files = list_r2_files(bucket, prefix)
-    json_files = [f for f in files if f.endswith("gold_price.json")]
+def load_existing_r2_data(prefix):
+    files = list_r2_files(BUCKET, prefix)
+    json_files = sorted([f for f in files if f.endswith(".json")], reverse=True)
     
     if not json_files:
-        print("ℹ️ No existing JSON file found on R2.")
         return pd.DataFrame()
     
-    # Download the latest JSON file
-    json_key = json_files[0]  # Should only be one gold_price.json
-    local_json = SAVE_DIR / "temp_gold_price.json"
+    # Try the latest few to find valid data
+    for latest_file in json_files[:5]:
+        local_temp = SAVE_DIR / "temp_existing.json"
+        if download_from_r2(BUCKET, latest_file, str(local_temp)):
+            try:
+                with open(local_temp, "r") as f:
+                    content = json.load(f)
+                    data = content.get("data", {})
+                records = []
+                for d_str, vals in data.items():
+                    rec = {"date": pd.to_datetime(d_str)}
+                    rec.update(vals)
+                    records.append(rec)
+                os.remove(local_temp)
+                if records:
+                    return pd.DataFrame(records)
+            except:
+                if local_temp.exists(): os.remove(local_temp)
+                continue
+    return pd.DataFrame()
+
+def process_and_upload(category, new_record, prefix, filename_prefix, unit_desc):
+    print(f"📈 Processing {category} data...")
+    existing_df = load_existing_r2_data(prefix)
     
-    if download_from_r2(bucket, json_key, str(local_json)):
-        try:
-            with open(local_json, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # Convert JSON data back to DataFrame
-            records = []
-            for date_str, prices in data.get("data", {}).items():
-                record = {"date": pd.to_datetime(date_str)}
-                record.update(prices)
-                records.append(record)
-            
-            df = pd.DataFrame(records)
-            print(f"✅ Loaded {len(df)} existing records from R2.")
-            
-            # Clean up temp file
-            os.remove(local_json)
-            return df
-        except Exception as e:
-            print(f"⚠️ Error loading JSON: {e}")
-            return pd.DataFrame()
+    new_df = pd.DataFrame([new_record])
+    new_df["date"] = pd.to_datetime(new_df["date"])
+    
+    if not existing_df.empty:
+        combined = pd.concat([existing_df, new_df], ignore_index=True)
+        # Drop problematic columns if any, only keep relevant ones
+        cols = ["date"] + [k for k in new_record.keys() if k != "date" and k != "all_sources"]
+        combined = combined[cols]
+        combined = combined.drop_duplicates(subset=["date"], keep="last").sort_values("date")
     else:
-        return pd.DataFrame()
-
-
-# ======================================================
-# 3️⃣ MERGE AND GENERATE JSON AND CSV
-# ======================================================
-def generate_gold_json(df, output_path):
-    """Convert DataFrame to JSON format indexed by date."""
-    # Sort by date
-    df = df.sort_values("date").reset_index(drop=True)
+        cols = ["date"] + [k for k in new_record.keys() if k != "date" and k != "all_sources"]
+        combined = new_df[cols]
+        
+    date_suffix = datetime.now().strftime("%y%m%d")
+    json_filename = f"{filename_prefix}_{date_suffix}.json"
+    json_path = SAVE_DIR / json_filename
     
-    # Convert to date-indexed dictionary
     data_dict = {}
-    for _, row in df.iterrows():
-        date_str = row["date"].strftime("%Y-%m-%d")
-        data_dict[date_str] = {
-            "bar_buy": float(row["bar_buy"]) if pd.notna(row["bar_buy"]) else None,
-            "bar_sell": float(row["bar_sell"]) if pd.notna(row["bar_sell"]) else None,
-            "ring_buy": float(row["ring_buy"]) if pd.notna(row["ring_buy"]) else None,
-            "ring_sell": float(row["ring_sell"]) if pd.notna(row["ring_sell"]) else None,
-        }
+    for _, row in combined.iterrows():
+        d_str = row["date"].strftime("%Y-%m-%d")
+        vals = {k: v for k, v in row.to_dict().items() if k != "date" and pd.notnull(v)}
+        data_dict[d_str] = vals
     
-    # Create JSON structure
-    json_data = {
-        "last_updated": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+    json_out = {
+        "last_updated": datetime.now().isoformat(),
         "total_records": len(data_dict),
-        "units": "million_vnd",
-        "note": "All prices are in million VND (triệu VNĐ). Ring prices converted from thousand VND.",
+        "units": unit_desc,
         "data": data_dict
     }
     
-    # Save to file
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(json_data, f, ensure_ascii=False, indent=2)
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(json_out, f, ensure_ascii=False, indent=2)
+        
+    upload_to_r2(str(json_path), BUCKET, f"{prefix}{json_filename}")
+    print(f"✅ {category} uploaded: {json_filename}")
+
+def update_precious_metals():
+    gold_data = fetch_gold_data()
+    silver_data = fetch_silver_data()
     
-    print(f"💾 Saved JSON → {output_path} ({len(data_dict)} records)")
-    return output_path
+    if gold_data["bar_buy"] or gold_data["ring_buy"]:
+        process_and_upload("Gold", gold_data, "cafef_data/gold_price/", "gold_price", "million_vnd")
+        
+    if silver_data["silver_buy"]:
+        process_and_upload("Silver", silver_data, "cafef_data/silver_price/", "silver_price", "million_vnd_per_kg")
 
-
-def generate_gold_csv(df, output_path):
-    """Generate CSV file with dates as rows and prices as columns."""
-    # Sort by date
-    df = df.sort_values("date").reset_index(drop=True)
-    
-    # Format date column
-    df["date"] = df["date"].dt.strftime("%Y-%m-%d")
-    
-    # Save to CSV
-    df.to_csv(output_path, index=False, encoding='utf-8')
-    
-    print(f"💾 Saved CSV → {output_path} ({len(df)} records)")
-    return output_path
-
-
-# ======================================================
-# 4️⃣ CHECK EXISTING JSON DATES
-# ======================================================
-def check_existing_json_dates(df):
-    """Print summary of dates available in the JSON data."""
-    if df.empty:
-        print("ℹ️ No existing data.")
-        return
-    
-    df = df.sort_values("date")
-    min_date = df["date"].min().strftime("%Y-%m-%d")
-    max_date = df["date"].max().strftime("%Y-%m-%d")
-    total = len(df)
-    
-    print(f"\n📊 Data Summary:")
-    print(f"   Total records: {total}")
-    print(f"   Date range: {min_date} to {max_date}")
-    print(f"   Latest 5 dates:")
-    for date in df["date"].tail(5):
-        print(f"     - {date.strftime('%Y-%m-%d')}")
-
-
-# ======================================================
-# 5️⃣ CHECK IF UPDATE NEEDED
-# ======================================================
-def latest_json_date(bucket, prefix):
-    """Check if JSON file exists and get last_updated timestamp."""
-    files = list_r2_files(bucket, prefix)
-    json_files = [f for f in files if f.endswith("gold_price.json")]
-    
-    if not json_files:
-        return None
-    
-    # Download and check last_updated
-    json_key = json_files[0]
-    local_json = SAVE_DIR / "temp_check.json"
-    
-    if download_from_r2(bucket, json_key, str(local_json)):
-        try:
-            with open(local_json, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            last_updated = data.get("last_updated", None)
-            os.remove(local_json)
-            if last_updated:
-                return datetime.fromisoformat(last_updated)
-        except Exception:
-            pass
-    
-    return None
-
-
-# ======================================================
-# 6️⃣ MAIN SCRIPT
-# ======================================================
-def update_gold_prices(local_only=False):
-    """Update gold prices. If local_only=True, skip R2 operations."""
-    today = datetime.now()
-
-    # --- Check if running in local-only mode ---
-    if local_only or not BUCKET:
-        print("📍 Running in LOCAL-ONLY mode (no R2 operations)")
-        existing_df = pd.DataFrame()
-    else:
-        # --- Skip if already up-to-date on R2 ---
-        latest_remote = latest_json_date(BUCKET, PREFIX_MAIN)
-        if latest_remote and latest_remote.date() >= today.date():
-            print(f"✅ Already up-to-date ({latest_remote.strftime('%Y-%m-%d')}) → skip download.")
-            return
-
-        # --- Load existing data from R2 ---
-        existing_df = load_existing_json_data(BUCKET, PREFIX_MAIN)
-
-    # --- Fetch new data from API ---
-    new_df = fetch_gold_data()
-
-    # --- Merge with existing data ---
-    if not existing_df.empty:
-        before = len(existing_df)
-        combined = pd.concat([existing_df, new_df], ignore_index=True)
-        combined = combined.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
-        after = len(combined)
-        print(f"📈 Merged data: {after - before} new records added.")
-    else:
-        combined = new_df
-        print(f"🆕 First-time import: {len(new_df)} records.")
-
-    # --- Generate JSON file ---
-    # Get latest date from data for filename
-    latest_date = combined["date"].max()
-    date_suffix = latest_date.strftime("%y%m%d")
-    
-    json_path = SAVE_DIR / f"gold_price_{date_suffix}.json"
-    generate_gold_json(combined, json_path)
-
-    # --- Generate CSV file ---
-    csv_path = SAVE_DIR / f"gold_price_{date_suffix}.csv"
-    generate_gold_csv(combined.copy(), csv_path)
-
-    # --- Show data summary ---
-    check_existing_json_dates(combined)
-
-    # --- Upload to R2 (skip if local_only) ---
-    try:
-        if not local_only and BUCKET:
-            # Upload new files
-            upload_to_r2(str(json_path), BUCKET, f"{PREFIX_MAIN}gold_price/gold_price_{date_suffix}.json")
-            upload_to_r2(str(csv_path), BUCKET, f"{PREFIX_MAIN}gold_price/gold_price_{date_suffix}.csv")
-            print(f"☁️ Uploaded new gold data (JSON + CSV) to R2 with date suffix: {date_suffix}")
-            
-            # Clean old backups (keep only 1)
-            print("🧹 Cleaning old backups for gold_price in R2...")
-            from utils_r2 import backup_and_cleanup_r2
-            backup_and_cleanup_r2(BUCKET, f"{PREFIX_MAIN}gold_price/", keep=1)
-        else:
-            print(f"\n📁 Files saved locally:")
-            print(f"   - {json_path}")
-            print(f"   - {csv_path}")
-            print(f"\n💡 Review the files, then run with R2 upload enabled.")
-
-    finally:
-        # Clean up local files
-        try:
-            for f in SAVE_DIR.glob("gold_price_*"):
-                os.remove(f)
-                print(f"🧹 Deleted local file: {f}")
-            if SAVE_DIR.exists() and not any(SAVE_DIR.iterdir()):
-                SAVE_DIR.rmdir()
-                print(f"🗑️ Removed empty folder: {SAVE_DIR}")
-        except Exception as e:
-            print(f"⚠️ Cleanup error: {e}")
-
-
-# ======================================================
-# 7️⃣ ENTRY POINT
-# ======================================================
 if __name__ == "__main__":
-    # Run in local-only mode if BUCKET is not set
-    local_mode = not bool(BUCKET)
-    update_gold_prices(local_only=local_mode)
-    print("✅ Gold price update completed successfully.")
+    update_precious_metals()
+    # Cleanup
+    for f in SAVE_DIR.glob("*.json"):
+        os.remove(f)
+    if SAVE_DIR.exists() and not any(SAVE_DIR.iterdir()):
+        SAVE_DIR.rmdir()
+    print("✅ Precious metals update completed.")
