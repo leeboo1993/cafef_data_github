@@ -34,7 +34,7 @@ def fetch_gold_data():
             content = resp.json()
             hist = content.get("Data", {}).get("goldPriceWorldHistories", [])
             if hist:
-                latest = hist[-1]
+                latest = hist[0]
                 # Price is in million VND per tael (e.g., 180.8)
                 results["bar_buy"] = latest.get("buyPrice")
                 results["bar_sell"] = latest.get("sellPrice")
@@ -58,9 +58,9 @@ def fetch_gold_data():
                     if buy_str and sell_str:
                         buy = float(buy_str)
                         sell = float(sell_str)
-                        # Value from DOJI is in 1000 VND / chi (e.g. 18380). Multiply by 10 to get Tael, then divide by 1000 to get Millions (or just divide by 100).
-                        results["ring_buy"] = buy / 100
-                        results["ring_sell"] = sell / 100
+                        # Value from DOJI is in 1000 VND / chi (e.g. 18380). Divide by 1000 to get Millions per Chi.
+                        results["ring_buy"] = buy / 1000
+                        results["ring_sell"] = sell / 1000
                     break
     except Exception as e:
         print(f"  ⚠️ Error fetching gold ring from DOJI: {e}")
@@ -70,39 +70,46 @@ def fetch_gold_data():
 def fetch_silver_data():
     """Fetch silver data by parsing the stable HTML structure."""
     print(f"🥈 Fetching Silver data from HTML: {URL_SILVER_PAGE}")
-    results = {"date": datetime.now().strftime("%Y-%m-%d"), "silver_buy": None, "silver_sell": None, "all_sources": []}
+    results = {"date": datetime.now().strftime("%Y-%m-%d"), "silver_buy": None, "silver_sell": None}
     
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
         resp = requests.get(URL_SILVER_PAGE, headers=headers, timeout=10)
         if resp.status_code == 200:
+            from bs4 import BeautifulSoup
             soup = BeautifulSoup(resp.text, 'lxml')
-            items = soup.select(".list_silver_price_item")
-            data = []
-            for item in items:
-                name_tag = item.select_one(".list_silver_price_name_type_name")
-                buy_tag = item.select_one(".list_silver_price_item_price_buy")
-                sell_tag = item.select_one(".list_silver_price_item_price_sell")
-                
-                if name_tag and buy_tag and sell_tag:
-                    name = name_tag.get_text(strip=True)
-                    buy = buy_tag.get_text(strip=True).replace(",", ".")
-                    sell = sell_tag.get_text(strip=True).replace(",", ".")
-                    try:
-                        data.append({
-                            "name": name,
-                            "buy": float(buy),
-                            "sell": float(sell)
-                        })
-                    except ValueError:
-                        continue
             
-            if data:
-                # Latest record (usually the first one, or most common "Bạc miếng Phú Quý")
-                latest = next((d for d in data if "PHÚ QUÝ" in d["name"].upper() and "MIẾNG" in d["name"].upper()), data[0])
-                results["silver_buy"] = latest["buy"]
-                results["silver_sell"] = latest["sell"]
-                results["all_sources"] = data
+            items = soup.select(".list_silver_price_item")
+            if not items:
+                print("  ⚠️ Could not find silver price items on the page.")
+                return results
+
+            # Find the row corresponding to 1Kilo, or fallback to the first row (1 luong)
+            kilo_found = False
+            for div in items:
+                cols = div.text.strip().split('\n')
+                if len(cols) >= 4 and "kilo" in cols[0].lower():
+                    buy = cols[1].strip()
+                    sell = cols[3].strip()
+                    if buy and sell:
+                        # Kilo string prices are already in million VND / Kilogram
+                        results["silver_buy"] = float(buy.replace(",", ""))
+                        results["silver_sell"] = float(sell.replace(",", ""))
+                        kilo_found = True
+                        break
+
+            if not kilo_found:
+                # Fallback to the first row
+                cols = items[0].text.strip().split('\n')
+                if len(cols) >= 4:
+                    buy = cols[1].strip()
+                    sell = cols[3].strip()
+                    if buy and sell:
+                        # 1 luong price -> convert to million/kg
+                        # Price per kg = (Price per tael) * 26.6667
+                        results["silver_buy"] = float(buy.replace(",", "")) * 26.6667
+                        results["silver_sell"] = float(sell.replace(",", "")) * 26.6667
+                        
     except Exception as e:
         print(f"  ⚠️ Error fetching silver: {e}")
         
